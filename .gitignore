@@ -1,5 +1,6 @@
 # virtual environment
 venv_bnn_kfac/
+data/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
