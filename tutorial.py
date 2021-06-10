@@ -58,16 +58,16 @@ testloader = torch.utils.data.DataLoader(testset, batch_size=1,
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 5, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(5, 10, 5)
+        self.conv1 = nn.Conv2d(1, 5, 5)  # bs x 1 x 28 x 28 -> bs x 5 x 24 x 24
+        self.pool = nn.MaxPool2d(2, 2)  # bs x 5 x 24 x 24 -> bs x 5 x 12 x 12
+        self.conv2 = nn.Conv2d(5, 10, 5)  # bs x 10 x 8 x 8
         self.fc1 = nn.Linear(10 * 4 * 4, 80)
         self.fc2 = nn.Linear(80, 10)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
-        x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch: bs x 160
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
