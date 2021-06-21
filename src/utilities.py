@@ -2,7 +2,7 @@ import torch
 from torch.autograd import Variable
 import numpy as np
 import os
-
+import pickle
 
 suffixes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
 
@@ -14,6 +14,9 @@ def mkdir(paths):
         if not os.path.isdir(path):
             os.makedirs(path)
 
+def save_object(obj, filename):
+    with open(filename, 'wb') as output:  # Overwrites any existing file.
+        pickle.dump(obj, output, pickle.HIGHEST_PROTOCOL)
 
 def humansize(nbytes):
     i = 0
