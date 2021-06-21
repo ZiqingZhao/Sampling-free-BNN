@@ -23,8 +23,8 @@ if __name__ == '__main__':
     # ignore warnings
     warnings.filterwarnings("ignore")
 
-    models_dir = 'models_KLaplace_NN_MNIST'
-    results_dir = 'results_KLaplace_NN_MNIST'
+    models_dir = 'models'
+    results_dir = 'results'
 
     mkdir(models_dir)
     mkdir(results_dir)
