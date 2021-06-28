@@ -1,214 +1,158 @@
+# Standard imports
+import os
+import copy
 import numpy as np
-import matplotlib
-import matplotlib.pyplot as plt
-import seaborn as sns
+from tqdm import tqdm
+from matplotlib import pyplot as plt
 
 import torch
-from torch import nn, optim
-from torch.optim import Optimizer
-from torch.autograd import Variable
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
 import torchvision
-from torchvision import datasets, transforms
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torchvision import transforms, datasets
+from torch.utils.data import DataLoader
 
-import time
-import warnings
+# From the repository
+from models.curvatures import BlockDiagonal, KFAC, EFB, INF
+from models.utilities import calibration_curve
 
-from src.utilities import mkdir
-from src.utilities import humansize
-from src.utilities import save_object
-from src.warpper import KBayes_Net
-from src.kfac import chol_scale_invert_kron_factor
+# Test and evaluation
+class TestEval:
+    def __init__(self, model, testloader, device):
+        self.model = model
+        self.testloader = testloader
+        self.device = device
+
+    def test_net(self):
+        correct = 0
+        total = 0
+        # since we're not training, we don't need to calculate the gradients for our outputs
+        with torch.no_grad():
+            for data in self.testloader:
+                images, labels = data[0].to(self.device), data[1].to(self.device)
+                # calculate outputs by running images through the network
+                outputs = self.model(images)
+                # the class with the highest energy is what we choose as prediction
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        print('Accuracy of the network on the 10000 test images: %d %%' % (
+                100 * correct / total))
+
+# 2. Define a Convolutional Neural Network =================================================
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 5, 5)  # bs x 1 x 28 x 28 -> bs x 5 x 24 x 24
+        self.pool = nn.MaxPool2d(2, 2)  # bs x 5 x 24 x 24 -> bs x 5 x 12 x 12
+        self.conv2 = nn.Conv2d(5, 10, 5)  # bs x 10 x 8 x 8
+        self.fc1 = nn.Linear(10 * 4 * 4, 80)
+        self.fc2 = nn.Linear(80, 10)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch: bs x 160
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+
 if __name__ == '__main__':
-    ## ignore warnings
-    warnings.filterwarnings("ignore")
-
-    models_dir = 'models'
-    results_dir = 'results'
-
-    mkdir(models_dir)
-    mkdir(results_dir)
-
-    ## set device
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:7" if use_cuda else "cpu")
-
-    ## load and normalize MNIST
-    transform = torchvision.transforms.ToTensor()
+    device = torch.device("cuda:7" if torch.cuda.is_available() else "cpu")
+    # load and normalize MNIST
     new_mirror = 'https://ossci-datasets.s3.amazonaws.com/mnist'
-    torchvision.datasets.MNIST.resources = [
+    datasets.MNIST.resources = [
         ('/'.join([new_mirror, url.split('/')[-1]]), md5)
         for url, md5 in datasets.MNIST.resources
     ]
-    dataset = datasets.MNIST(
-        "./data", train=True, download=True, transform=transform
-    )
 
-    ## split in train, validate and test sets
-    trainset, valset, testset = torch.utils.data.random_split(dataset, [5000, 1000, 54000])
-    # Dataloader
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, num_workers=3)
-    valloader = DataLoader(valset, batch_size=1)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False, num_workers=3)
+    train_set = datasets.MNIST(root="./data",
+                                           train=True,
+                                           transform=transforms.ToTensor(),
+                                           download=True)
+    train_loader = DataLoader(train_set, batch_size=32)
 
-    lr = 1e-3
-    prior_sig = 10000
-    batch_size = 100
-    net = KBayes_Net(lr=lr, channels_in=1, side_in=28, cuda=use_cuda, classes=10, batch_size=batch_size,
-                     prior_sig=prior_sig)
+    # And some for evaluating/testing
+    test_set = datasets.MNIST(root="./data",
+                                          train=False,
+                                          transform=transforms.ToTensor(),
+                                          download=True)
+    test_loader = DataLoader(test_set, batch_size=256)
 
-    ## train the network
-    nb_epochs = 10
-    nb_its_dev = 1
+    # Train the model (or load a pretrained one)
+    model = Net().to(device)
 
-    pred_cost_train = np.zeros(nb_epochs)
-    err_train = np.zeros(nb_epochs)
+    criterion = nn.CrossEntropyLoss().to(device)
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    evaluator = TestEval(model, test_loader, device)
 
-    cost_dev = np.zeros(nb_epochs)
-    err_dev = np.zeros(nb_epochs)
-    best_err = np.inf
+    diag = BlockDiagonal(model)
 
-    tic0 = time.time()
-    epoch = 0
-    for i in range(epoch, nb_epochs):
-        net.set_mode_train(True)
-        tic = time.time()
-        nb_samples = 0
-        for x, y in trainloader:
-            cost_pred, err = net.fit(x, y)
+    for images, labels in tqdm(train_loader):
+        logits = model(images.to(device))
+        dist = torch.distributions.Categorical(logits=logits)
 
-            err_train[i] += err
-            pred_cost_train[i] += cost_pred
-            nb_samples += len(x)
+        # A rank-10 diagonal FiM approximation.
+        for sample in range(10):
+            labels = dist.sample()
 
-        pred_cost_train[i] /= nb_samples
-        err_train[i] /= nb_samples
+            loss = criterion(logits, labels)
+            model.zero_grad()
+            loss.backward(retain_graph=True)
 
-        toc = time.time()
-        net.epoch = i
-        # ---- print
-        print("it %d/%d, Jtr_pred = %f, err = %f, " % (i, nb_epochs, pred_cost_train[i], err_train[i]), end="")
-        print("time: %f seconds\n" % (toc - tic))
-        # ---- dev
-        if i % nb_its_dev == 0:
-            net.set_mode_train(False)
-            nb_samples = 0
-            for j, (x, y) in enumerate(valloader):
-                cost, err, probs = net.eval(x, y)
+            diag.update(batch_size=images.size(0))
 
-                cost_dev[i] += cost
-                err_dev[i] += err
-                nb_samples += len(x)
+    kfac = KFAC(model)
 
-            cost_dev[i] /= nb_samples
-            err_dev[i] /= nb_samples
-            print('Jdev = %f, err = %f\n' % (cost_dev[i], err_dev[i]))
+    for images, labels in tqdm(train_loader):
+        logits = model(images.to(device))
+        dist = torch.distributions.Categorical(logits=logits)
 
-            if err_dev[i] < best_err:
-                best_err = err_dev[i]
-                net.save(models_dir + '/theta_best.dat')
+        # A rank-1 Kronecker factored FiM approximation.
+        labels = dist.sample()
+        loss = criterion(logits, labels)
+        model.zero_grad()
+        loss.backward()
+        kfac.update(batch_size=images.size(0))
 
-    toc0 = time.time()
-    runtime_per_it = (toc0 - tic0) / float(nb_epochs)
-    print('average time: %f seconds\n' % runtime_per_it)
+    efb = EFB(model, kfac.state)
 
-    ## results
-    print('\nRESULTS:')
-    nb_parameters = net.get_nb_parameters()
-    best_cost_dev = np.min(cost_dev)
-    best_cost_train = np.min(pred_cost_train)
-    err_dev_min = err_dev[::nb_its_dev].min()
+    for images, labels in tqdm(train_loader):
+        logits = model(images.to(device))
+        dist = torch.distributions.Categorical(logits=logits)
 
-    print('  cost_dev: %f (cost_train %f)' % (best_cost_dev, best_cost_train))
-    print('  err_dev: %f' % (err_dev_min))
-    print('  nb_parameters: %d (%s)' % (nb_parameters, humansize(nb_parameters)))
-    print('  time_per_it: %fs\n' % (runtime_per_it))
+        for sample in range(10):
+            labels = dist.sample()
 
-    ## Save results for plots
-    np.save(results_dir + '/cost_train.npy', pred_cost_train)
-    np.save(results_dir + '/cost_dev.npy', cost_dev)
-    np.save(results_dir + '/err_train.npy', err_train)
-    np.save(results_dir + '/err_dev.npy', err_dev)
+            loss = criterion(logits, labels)
+            model.zero_grad()
+            loss.backward(retain_graph=True)
 
-    ## fig cost vs its
-    textsize = 15
-    marker = 5
+            efb.update(batch_size=images.size(0))
 
-    plt.figure(dpi=100)
-    fig, ax1 = plt.subplots()
-    ax1.plot(pred_cost_train, 'r--')
-    ax1.plot(range(0, nb_epochs, nb_its_dev), cost_dev[::nb_its_dev], 'b-')
-    ax1.set_ylabel('Cross Entropy')
-    plt.xlabel('epoch')
-    plt.grid(b=True, which='major', color='k', linestyle='-')
-    plt.grid(b=True, which='minor', color='k', linestyle='--')
-    lgd = plt.legend(['test error', 'train error'], markerscale=marker, prop={'size': textsize, 'weight': 'normal'})
-    ax = plt.gca()
-    plt.title('classification costs')
-    for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                 ax.get_xticklabels() + ax.get_yticklabels()):
-        item.set_fontsize(textsize)
-        item.set_weight('normal')
-    plt.savefig(results_dir + '/cost.png', bbox_extra_artists=(lgd,), bbox_inches='tight')
+    inf = INF(model, diag.state, kfac.state, efb.state)
+    inf.update(rank=100)
 
-    plt.figure(dpi=100)
-    fig2, ax2 = plt.subplots()
-    ax2.set_ylabel('% error')
-    ax2.semilogy(range(0, nb_epochs, nb_its_dev), 100 * err_dev[::nb_its_dev], 'b-')
-    ax2.semilogy(100 * err_train, 'r--')
-    plt.xlabel('epoch')
-    plt.grid(b=True, which='major', color='k', linestyle='-')
-    plt.grid(b=True, which='minor', color='k', linestyle='--')
-    ax2.get_yaxis().set_minor_formatter(matplotlib.ticker.ScalarFormatter())
-    ax2.get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-    lgd = plt.legend(['test error', 'train error'], markerscale=marker, prop={'size': textsize, 'weight': 'normal'})
-    ax = plt.gca()
-    for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                 ax.get_xticklabels() + ax.get_yticklabels()):
-        item.set_fontsize(textsize)
-        item.set_weight('normal')
+    estimator = inf
+    add = 1e15
+    multiply = 1e20
+    estimator.invert(add, multiply)
 
-    ## get Kron hessian approx
-    EQ1, EHH1, MAP1, EQ2, EHH2, MAP2, EQ3, EHH3, MAP3 = net.get_K_laplace_params(trainloader)
-    h_params = [EQ1, EHH1, MAP1, EQ2, EHH2, MAP2, EQ3, EHH3, MAP3]
-    save_object(h_params, models_dir + '/block_hessian_params.pkl')
+    mean_predictions = 0
+    samples = 10  # 10 Monte Carlo samples from the weight posterior.
 
-    ## do scalling and get inverse
-    data_scale = np.sqrt(60000)
-    prior_sig = 0.15
-    prior_prec = 1/prior_sig**2
-    prior_scale = np.sqrt(prior_prec)
+    with torch.no_grad():
+        for sample in range(samples):
+            estimator.sample_and_replace()
+            predictions, labels = eval(model, test_loader)
+            mean_predictions += predictions
+        mean_predictions /= samples
+    print(f"Accuracy: {100 * np.mean(np.argmax(mean_predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
 
-    # upper_Qinv, lower_HHinv
-    scale_inv_EQ1 = chol_scale_invert_kron_factor(EQ1, prior_scale, data_scale, upper=True)
-    scale_inv_EHH1 = chol_scale_invert_kron_factor(EHH1, prior_scale, data_scale, upper=False)
+    ece_bnn = calibration_curve(mean_predictions.cpu().numpy(), labels.numpy())[0]
+    print(f"ECE BNN: {100 * ece_bnn:.2f}%")
 
-    scale_inv_EQ2 = chol_scale_invert_kron_factor(EQ2, prior_scale, data_scale, upper=True)
-    scale_inv_EHH2 = chol_scale_invert_kron_factor(EHH2, prior_scale, data_scale, upper=False)
-
-    scale_inv_EQ3 = chol_scale_invert_kron_factor(EQ3, prior_scale, data_scale, upper=True)
-    scale_inv_EHH3 = chol_scale_invert_kron_factor(EHH3, prior_scale, data_scale, upper=False)
-
-    ## laplace inference on test set
-    test_cost = 0  # Note that these are per sample
-    test_err = 0
-    nb_samples = 0
-    test_predictions = np.zeros((10000, 10))
-
-    Nsamples = 100
-
-    net.set_mode_train(False)
-
-    for j, (x, y) in enumerate(valloader):
-        cost, err, probs = net.sample_eval(x, y, Nsamples, scale_inv_EQ1, scale_inv_EHH1, MAP1, scale_inv_EQ2,
-                                           scale_inv_EHH2, MAP2, scale_inv_EQ3, scale_inv_EHH3, MAP3, logits=False)
-
-        test_cost += cost
-        test_err += err.cpu().numpy()
-        test_predictions[nb_samples:nb_samples + len(x), :] = probs.numpy()
-        nb_samples += len(x)
-
-    test_err /= nb_samples
-    print('Loglike = %5.6f, err = %1.6f\n' % (-test_cost, test_err))
 
