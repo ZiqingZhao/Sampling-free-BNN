@@ -11,56 +11,15 @@ from torchvision import transforms, datasets
 from torch.utils.data import DataLoader
 
 # From the repository
+from models.wrapper import BaseNet
 from models.curvatures import BlockDiagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
 from models import plot
 
-# define a Convolutional Neural Network
-class Net(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.conv1 = nn.Conv2d(1, 5, 5)  # bs x 1 x 28 x 28 -> bs x 5 x 24 x 24
-        self.pool = nn.MaxPool2d(2, 2)  # bs x 5 x 24 x 24 -> bs x 5 x 12 x 12
-        self.conv2 = nn.Conv2d(5, 10, 5)  # bs x 10 x 8 x 8
-        self.fc1 = nn.Linear(10 * 4 * 4, 80)
-        self.fc2 = nn.Linear(80, 10)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = torch.flatten(x, 1)  # flatten all dimensions except batch: bs x 160
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-
-def train(model, data, criterion, optimizer, epochs):
-    model.train()
-    for epoch in range(epochs):
-        for images, labels in tqdm(data):
-            logits = model(images.to(device))
-            loss = criterion(logits, labels.to(device))
-            model.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-
-def eval(model, data):
-    model.eval()
-    logits = torch.Tensor().to(device)
-    targets = torch.LongTensor()
-    with torch.no_grad():
-        for images, labels in tqdm(data):
-            logits = torch.cat([logits, model(images.to(device))])
-            targets = torch.cat([targets, labels])
-    return torch.nn.functional.softmax(logits, dim=1), targets
-
-
-def accuracy(predictions, labels):
-    print(f"Accuracy: {100 * np.mean(np.argmax(predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
-
 
 if __name__ == '__main__':
+    models_dir = 'models'
+    results_dir = 'results'
     device = torch.device("cuda:7" if torch.cuda.is_available() else "cpu")
     # load and normalize MNIST
     new_mirror = 'https://ossci-datasets.s3.amazonaws.com/mnist'
@@ -83,52 +42,53 @@ if __name__ == '__main__':
     test_loader = DataLoader(test_set, batch_size=256)
 
     # Train the model
-    model = Net().to(device)
+    net = BaseNet(lr=1e-3, epoch=3, batch_size=32, device=device)
     criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    train(model, train_loader, criterion, optimizer, epochs=3)
-    sgd_predictions, sgd_labels = eval(model, test_loader)
+    net.train(train_loader, criterion)
+    sgd_predictions, sgd_labels = net.eval(test_loader)
+    net.save(models_dir + '/theta_best.dat')
     print(f"MAP Accuracy: {100 * np.mean(np.argmax(sgd_predictions.cpu().numpy(), axis=1) == sgd_labels.numpy()):.2f}%")
 
     # get block diagonal Fisher information matrix
-    diag = BlockDiagonal(model)
+    diag = BlockDiagonal(net.model)
     for images, labels in tqdm(train_loader):
-        logits = model(images.to(device))
+        logits = net.model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
         # A rank-10 diagonal FiM approximation.
         for sample in range(10):
             labels = dist.sample()
             loss = criterion(logits, labels)
-            model.zero_grad()
+            net.model.zero_grad()
             loss.backward(retain_graph=True)
             diag.update(batch_size=images.size(0))
+    diag.save(models_dir + '/block_diag.dat')
 
     # compute the Kronecker factored FiM
-    kfac = KFAC(model)
+    kfac = KFAC(net.model)
     for images, labels in tqdm(train_loader):
-        logits = model(images.to(device))
+        logits = net.model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
         # A rank-1 Kronecker factored FiM approximation.
         labels = dist.sample()
         loss = criterion(logits, labels)
-        model.zero_grad()
+        net.model.zero_grad()
         loss.backward()
         kfac.update(batch_size=images.size(0))
 
     # compute the eigenvalue corrected diagonal
-    efb = EFB(model, kfac.state)
+    efb = EFB(net.model, kfac.state)
     for images, labels in tqdm(train_loader):
-        logits = model(images.to(device))
+        logits = net.model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
         for sample in range(10):
             labels = dist.sample()
             loss = criterion(logits, labels)
-            model.zero_grad()
+            net.model.zero_grad()
             loss.backward(retain_graph=True)
             efb.update(batch_size=images.size(0))
 
     # compute the diagonal correction term D
-    inf = INF(model, diag.state, kfac.state, efb.state)
+    inf = INF(net.model, diag.state, kfac.state, efb.state)
     inf.update(rank=100)
 
     # inversion and sampling
@@ -143,7 +103,7 @@ if __name__ == '__main__':
     with torch.no_grad():
         for sample in range(samples):
             estimator.sample_and_replace()
-            predictions, labels = eval(model, test_loader)
+            predictions, labels = net.eval(test_loader)
             mean_predictions += predictions
         mean_predictions /= samples
     print(f"KFAC Accuracy: {100 * np.mean(np.argmax(mean_predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")

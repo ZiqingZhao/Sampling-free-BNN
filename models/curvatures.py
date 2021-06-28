@@ -260,6 +260,13 @@ class BlockDiagonal(Curvature):
         return torch.cat([x[:layer.weight.numel()].contiguous().view(*layer.weight.shape),
                           torch.unsqueeze(x[layer.weight.numel():], dim=1)], dim=1)
 
+    def save(self, filename):
+        print('Writting %s\n' % filename)
+        torch.save({
+            'state': self.state,
+            'inv_state': self.inv_state,
+            'model': self.model,}, filename)
+
 
 class KFAC(Curvature):
     r"""The Kronecker-factored Fisher information matrix approximation.

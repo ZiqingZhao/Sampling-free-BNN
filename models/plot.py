@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt, colors, patheffects, offsetbox
 from seaborn import distplot
 from statsmodels.distributions.empirical_distribution import ECDF
 
-from curvature.utils import (predictive_entropy, expected_calibration_error, confidence, accuracy, binned_kl_distance,
+from models.utilities import (predictive_entropy, expected_calibration_error, confidence, accuracy, binned_kl_distance,
                              calibration_curve, linear_interpolation)
 
 
