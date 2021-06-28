@@ -1,12 +1,9 @@
 # Standard imports
-import os
-import copy
 import numpy as np
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 
 import torch
-import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -16,7 +13,7 @@ from torch.utils.data import DataLoader
 # From the repository
 from models.curvatures import BlockDiagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
-
+from models import plot
 
 # define a Convolutional Neural Network
 class Net(nn.Module):
@@ -95,7 +92,6 @@ if __name__ == '__main__':
 
     # get block diagonal Fisher information matrix
     diag = BlockDiagonal(model)
-
     for images, labels in tqdm(train_loader):
         logits = model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
@@ -156,4 +152,9 @@ if __name__ == '__main__':
     ece_bnn = calibration_curve(mean_predictions.cpu().numpy(), labels.numpy())[0]
     print(f"ECE BNN: {100 * ece_bnn:.2f}%")
 
-
+    fig, ax = plt.subplots(figsize=(12, 7), tight_layout=True)
+    c1 = next(ax._get_lines.prop_cycler)['color']
+    c2 = next(ax._get_lines.prop_cycler)['color']
+    plot.calibration(sgd_predictions.cpu().numpy(), sgd_labels.numpy(), color=c1, label="SGD", axis=ax)
+    plot.calibration(mean_predictions.cpu().numpy(), labels.numpy(), color=c2, label="BNN", axis=ax)
+    plt.show()

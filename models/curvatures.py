@@ -521,12 +521,9 @@ class INF(Curvature):
             # Low-rank U_A, low-rank U_G, low-rank Lambda, D
             lr_frst_eigvecs, lr_scnd_eigvecs, lr_lambda, correction = value
             correction[correction < 0] = 0
-
             reg_lr_lambda = (s * lr_lambda).sqrt()
             reg_inv_correction = torch.reciprocal(s * correction + n).sqrt()
-
             pre_sample = self.pre_sampler(lr_frst_eigvecs, lr_scnd_eigvecs, reg_lr_lambda, reg_inv_correction)
-
             self.inv_state[layer] = (lr_frst_eigvecs, lr_scnd_eigvecs, reg_inv_correction, pre_sample)
 
     def sample(self,
