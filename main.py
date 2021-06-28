@@ -17,31 +17,8 @@ from torch.utils.data import DataLoader
 from models.curvatures import BlockDiagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
 
-# Test and evaluation
-class TestEval:
-    def __init__(self, model, testloader, device):
-        self.model = model
-        self.testloader = testloader
-        self.device = device
 
-    def test_net(self):
-        correct = 0
-        total = 0
-        # since we're not training, we don't need to calculate the gradients for our outputs
-        with torch.no_grad():
-            for data in self.testloader:
-                images, labels = data[0].to(self.device), data[1].to(self.device)
-                # calculate outputs by running images through the network
-                outputs = self.model(images)
-                # the class with the highest energy is what we choose as prediction
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-
-        print('Accuracy of the network on the 10000 test images: %d %%' % (
-                100 * correct / total))
-
-# 2. Define a Convolutional Neural Network =================================================
+# define a Convolutional Neural Network
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
@@ -58,6 +35,32 @@ class Net(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
+
+
+def train(model, data, criterion, optimizer, epochs):
+    model.train()
+    for epoch in range(epochs):
+        for images, labels in tqdm(data):
+            logits = model(images.to(device))
+            loss = criterion(logits, labels.to(device))
+            model.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+
+def eval(model, data):
+    model.eval()
+    logits = torch.Tensor().to(device)
+    targets = torch.LongTensor()
+    with torch.no_grad():
+        for images, labels in tqdm(data):
+            logits = torch.cat([logits, model(images.to(device))])
+            targets = torch.cat([targets, labels])
+    return torch.nn.functional.softmax(logits, dim=1), targets
+
+
+def accuracy(predictions, labels):
+    print(f"Accuracy: {100 * np.mean(np.argmax(predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
 
 
 if __name__ == '__main__':
@@ -82,35 +85,33 @@ if __name__ == '__main__':
                                           download=True)
     test_loader = DataLoader(test_set, batch_size=256)
 
-    # Train the model (or load a pretrained one)
+    # Train the model
     model = Net().to(device)
-
     criterion = nn.CrossEntropyLoss().to(device)
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    evaluator = TestEval(model, test_loader, device)
+    train(model, train_loader, criterion, optimizer, epochs=3)
+    sgd_predictions, sgd_labels = eval(model, test_loader)
+    print(f"MAP Accuracy: {100 * np.mean(np.argmax(sgd_predictions.cpu().numpy(), axis=1) == sgd_labels.numpy()):.2f}%")
 
+    # get block diagonal Fisher information matrix
     diag = BlockDiagonal(model)
 
     for images, labels in tqdm(train_loader):
         logits = model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
-
         # A rank-10 diagonal FiM approximation.
         for sample in range(10):
             labels = dist.sample()
-
             loss = criterion(logits, labels)
             model.zero_grad()
             loss.backward(retain_graph=True)
-
             diag.update(batch_size=images.size(0))
 
+    # compute the Kronecker factored FiM
     kfac = KFAC(model)
-
     for images, labels in tqdm(train_loader):
         logits = model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
-
         # A rank-1 Kronecker factored FiM approximation.
         labels = dist.sample()
         loss = criterion(logits, labels)
@@ -118,24 +119,23 @@ if __name__ == '__main__':
         loss.backward()
         kfac.update(batch_size=images.size(0))
 
+    # compute the eigenvalue corrected diagonal
     efb = EFB(model, kfac.state)
-
     for images, labels in tqdm(train_loader):
         logits = model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
-
         for sample in range(10):
             labels = dist.sample()
-
             loss = criterion(logits, labels)
             model.zero_grad()
             loss.backward(retain_graph=True)
-
             efb.update(batch_size=images.size(0))
 
+    # compute the diagonal correction term D
     inf = INF(model, diag.state, kfac.state, efb.state)
     inf.update(rank=100)
 
+    # inversion and sampling
     estimator = inf
     add = 1e15
     multiply = 1e20
@@ -150,8 +150,9 @@ if __name__ == '__main__':
             predictions, labels = eval(model, test_loader)
             mean_predictions += predictions
         mean_predictions /= samples
-    print(f"Accuracy: {100 * np.mean(np.argmax(mean_predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
+    print(f"KFAC Accuracy: {100 * np.mean(np.argmax(mean_predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
 
+    # calibration
     ece_bnn = calibration_curve(mean_predictions.cpu().numpy(), labels.numpy())[0]
     print(f"ECE BNN: {100 * ece_bnn:.2f}%")
 
