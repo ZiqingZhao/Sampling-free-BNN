@@ -25,8 +25,8 @@ class Net(nn.Module):
 
 
 class BaseNet(object):
-    def __init__(self, lr=1e-3, epoch=3, batch_size=32, device='cpu'):
-        print('Creating Net!!')
+    def __init__(self, lr=1e-3, epoch=3, batch_size=32, device='cuda'):
+        print('Creating Net...')
         self.lr = lr
         self.epoch = epoch
         self.batch_size = batch_size
@@ -56,6 +56,16 @@ class BaseNet(object):
             'lr': self.lr,
             'model': self.model,
             'optimizer': self.optimizer}, filename)
+
+    def load(self, filename):
+        print('Reading %s\n' % filename)
+        state_dict = torch.load(filename)
+        self.epoch = state_dict['epoch']
+        self.lr = state_dict['lr']
+        self.model = state_dict['model']
+        self.optimizer = state_dict['optimizer']
+        print('  restoring epoch: %d, lr: %f' % (self.epoch, self.lr))
+        return self.epoch
 
     def train(self, data, criterion):
         self.model.train()

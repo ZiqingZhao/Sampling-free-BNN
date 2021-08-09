@@ -128,7 +128,21 @@ class Curvature(ABC):
                         _sample = self.sample(layer)
                         self._replace(_sample, weight, bias)
 
+    # feat: add save/load model functions
+    def save(self, filename):         
+        torch.save({
+            'state': self.state,
+            'inv_state': self.inv_state,
+            'model': self.model,}, filename)
+        print('Writting %s complete!\n' % filename)     
 
+    def load(self, filename):
+        state_dict = torch.load(filename)
+        self.state = state_dict['state']
+        self.inv_state = state_dict['inv_state']
+        self.model = state_dict['model']
+        print('Loading %s complete!\n' % filename)
+        
 class Diagonal(Curvature):
     r"""The diagonal Fisher information or Generalized Gauss Newton matrix approximation.
 
@@ -259,14 +273,6 @@ class BlockDiagonal(Curvature):
         x = self.inv_state[layer].new(self.inv_state[layer].shape[0]).normal_() @ self.inv_state[layer]
         return torch.cat([x[:layer.weight.numel()].contiguous().view(*layer.weight.shape),
                           torch.unsqueeze(x[layer.weight.numel():], dim=1)], dim=1)
-
-    def save(self, filename):
-        print('Writting %s\n' % filename)
-        torch.save({
-            'state': self.state,
-            'inv_state': self.inv_state,
-            'model': self.model,}, filename)
-
 
 class KFAC(Curvature):
     r"""The Kronecker-factored Fisher information matrix approximation.

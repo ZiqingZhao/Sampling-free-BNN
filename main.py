@@ -18,9 +18,9 @@ from models import plot
 
 
 if __name__ == '__main__':
-    models_dir = 'models'
+    models_dir = 'theta'
     results_dir = 'results'
-    device = torch.device("cuda:7" if torch.cuda.is_available() else "cpu")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # load and normalize MNIST
     new_mirror = 'https://ossci-datasets.s3.amazonaws.com/mnist'
     datasets.MNIST.resources = [
@@ -49,20 +49,6 @@ if __name__ == '__main__':
     net.save(models_dir + '/theta_best.dat')
     print(f"MAP Accuracy: {100 * np.mean(np.argmax(sgd_predictions.cpu().numpy(), axis=1) == sgd_labels.numpy()):.2f}%")
 
-    # get block diagonal Fisher information matrix
-    diag = BlockDiagonal(net.model)
-    for images, labels in tqdm(train_loader):
-        logits = net.model(images.to(device))
-        dist = torch.distributions.Categorical(logits=logits)
-        # A rank-10 diagonal FiM approximation.
-        for sample in range(10):
-            labels = dist.sample()
-            loss = criterion(logits, labels)
-            net.model.zero_grad()
-            loss.backward(retain_graph=True)
-            diag.update(batch_size=images.size(0))
-    diag.save(models_dir + '/block_diag.dat')
-
     # compute the Kronecker factored FiM
     kfac = KFAC(net.model)
     for images, labels in tqdm(train_loader):
@@ -74,25 +60,10 @@ if __name__ == '__main__':
         net.model.zero_grad()
         loss.backward()
         kfac.update(batch_size=images.size(0))
-
-    # compute the eigenvalue corrected diagonal
-    efb = EFB(net.model, kfac.state)
-    for images, labels in tqdm(train_loader):
-        logits = net.model(images.to(device))
-        dist = torch.distributions.Categorical(logits=logits)
-        for sample in range(10):
-            labels = dist.sample()
-            loss = criterion(logits, labels)
-            net.model.zero_grad()
-            loss.backward(retain_graph=True)
-            efb.update(batch_size=images.size(0))
-
-    # compute the diagonal correction term D
-    inf = INF(net.model, diag.state, kfac.state, efb.state)
-    inf.update(rank=100)
+    kfac.save(models_dir + '/kfac.dat')
 
     # inversion and sampling
-    estimator = inf
+    estimator = kfac
     add = 1e15
     multiply = 1e20
     estimator.invert(add, multiply)
@@ -109,12 +80,20 @@ if __name__ == '__main__':
     print(f"KFAC Accuracy: {100 * np.mean(np.argmax(mean_predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
 
     # calibration
+    ece_nn = calibration_curve(sgd_predictions.cpu().numpy(), sgd_labels.numpy())[0]
     ece_bnn = calibration_curve(mean_predictions.cpu().numpy(), labels.numpy())[0]
-    print(f"ECE BNN: {100 * ece_bnn:.2f}%")
+    print(f"ECE NN: {100 * ece_nn:.2f}%, ECE BNN: {100 * ece_bnn:.2f}%")
+
+    fig, ax = plt.subplots(ncols=2, nrows=1, figsize=(12, 6), tight_layout=True)
+    ax[0].set_title('SGD', fontsize=16)
+    ax[1].set_title('KFAC-Laplace', fontsize=16)
+    plot.reliability_diagram(sgd_predictions.cpu().numpy(), sgd_labels.numpy(), axis=ax[0])
+    plot.reliability_diagram(mean_predictions.cpu().numpy(), labels.numpy(), axis=ax[1])
+    plt.savefig(results_dir+'reliability_diagram.png')
 
     fig, ax = plt.subplots(figsize=(12, 7), tight_layout=True)
     c1 = next(ax._get_lines.prop_cycler)['color']
     c2 = next(ax._get_lines.prop_cycler)['color']
     plot.calibration(sgd_predictions.cpu().numpy(), sgd_labels.numpy(), color=c1, label="SGD", axis=ax)
-    plot.calibration(mean_predictions.cpu().numpy(), labels.numpy(), color=c2, label="BNN", axis=ax)
-    plt.show()
+    plot.calibration(mean_predictions.cpu().numpy(), labels.numpy(), color=c2, label="KFAC-Laplace", axis=ax)
+    plt.savefig(results_dir+'calibration.png')
