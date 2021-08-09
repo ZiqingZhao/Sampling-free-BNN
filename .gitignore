@@ -139,3 +139,7 @@ dmypy.json
 
 # model
 /theta/*
+
+# test file
+test.py
+tutorial.py
