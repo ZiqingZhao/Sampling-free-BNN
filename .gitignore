@@ -141,5 +141,5 @@ dmypy.json
 /theta/*
 
 # test file
-test.py
+test/*
 tutorial.py
