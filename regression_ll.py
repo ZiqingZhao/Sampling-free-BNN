@@ -73,16 +73,6 @@ def gradient(y, x, grad_outputs=None):
     grad = torch.autograd.grad(y, [x], grad_outputs = grad_outputs, create_graph=True, retain_graph=True, allow_unused=True)[0]
     return grad
 
-def jacobian(y, x):
-    """Compute dy/dx = dy/dx @ grad_outputs; 
-    for grad_outputs in[1, 0, ..., 0], [0, 1, 0, ..., 0], ...., [0, ..., 0, 1]"""
-    jac = torch.zeros(y.shape[0], x.shape[0]) 
-    for i in range(y.shape[0]):
-        grad_outputs = torch.zeros_like(y)
-        grad_outputs[i] = 1
-        jac[i] = gradient(y, x, grad_outputs = grad_outputs)
-    return jac
-
 
 torch.manual_seed(2)    # reproducible
 
@@ -150,7 +140,6 @@ pred_std = np.array(std, dtype=float)
 plt.figure(figsize=(10,10))
 plt.scatter(x.data.numpy(), y.data.numpy(), s=80, color = "black")
 plt.plot(x_.data.numpy(), pred_mean, c='royalblue', label='mean pred')
-#plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 3 * pred_std, pred_mean.data.numpy().squeeze(1) + 3 * pred_std, color='cornflowerblue', alpha=.5, label='+/- 3 std')
 plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 3*pred_std, pred_mean + 3*pred_std, color='cornflowerblue', alpha=.5, label='+/- 3 std')
 plt.plot(x_.data.numpy(), y_.data.numpy(), c='grey', label='truth')
 plt.title('Regression Analysis')
