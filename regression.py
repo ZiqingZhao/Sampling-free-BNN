@@ -24,20 +24,11 @@ import imageio
 
 
 #torch.manual_seed()    # reproducible
-
-x = torch.unsqueeze(torch.linspace(-2, 2, 100), dim=1)  # x data (tensor), shape=(100, 1)
-y = x.pow(3) + 0.5*torch.rand(x.size())                 # noisy y data (tensor), shape=(100, 1)
+x = torch.FloatTensor(30, 1).uniform_(-4, 4).sort(dim=0).values # random x data (tensor), shape=(30, 1)
+y = x.pow(3) + 0.2*torch.rand(x.size())  # noisy y data (tensor), shape=(30, 1)
 
 # torch can only train on Variable, so convert them to Variable
 x, y = Variable(x), Variable(y)
-
-# view data
-plt.figure(figsize=(10,4))
-plt.scatter(x.data.numpy(), y.data.numpy(), color = "orange")
-plt.title('Regression Analysis')
-plt.xlabel('Independent varible')
-plt.ylabel('Dependent varible')
-plt.show()
 
 # this is one way to define a network
 class Net(torch.nn.Module):
@@ -56,14 +47,12 @@ class Net(torch.nn.Module):
         return x
 
 net = Net(input_dim=1, output_dim=1, n_hid=10)     # define the network
-optimizer = torch.optim.SGD(net.parameters(), lr=0.2)
+optimizer = torch.optim.SGD(net.parameters(), lr=1e-3)
 loss_func = torch.nn.MSELoss()  # this is for regression mean squared loss
 
-my_images = []
-fig, ax = plt.subplots(figsize=(12,7))
 
 # train the network
-for t in range(400):
+for t in range(10000):
     prediction = net.forward(x)     # input x and predict based on x
     loss = loss_func(prediction, y)     # must be (1. nn output, 2. target)
     optimizer.zero_grad()   # clear gradients for next train
@@ -78,12 +67,12 @@ loss.backward()         # backpropagation, compute gradients
 kfac.update(batch_size=1)
 
 estimator = kfac
-add = 1
-multiply = 10
+add = 2
+multiply = 100
 estimator.invert(add, multiply)
 
 
-x_ = torch.unsqueeze(torch.linspace(-4, 4), dim=1)  # x data (tensor), shape=(100, 1)
+x_ = torch.unsqueeze(torch.linspace(-6, 6), dim=1)  # x data (tensor), shape=(100, 1)
 y_ = x_.pow(3)      
 x_ = Variable(x_)
 y_ = Variable(y_)
@@ -98,10 +87,13 @@ pred = np.array(pred_lst).T
 pred_mean = pred.mean(axis=1)
 pred_std = pred.std(axis=1)
 
+
+# view data
+plt.figure(figsize=(10,10))
+plt.scatter(x.data.numpy(), y.data.numpy(), s=80, color = "black")
 plt.plot(x_.data.numpy(), pred_mean.T, c='royalblue', label='mean pred')
 plt.fill_between(x_.data.numpy().squeeze(1), pred_mean.T - 3 * pred_std, pred_mean.T + 3 * pred_std,
                     color='cornflowerblue', alpha=.5, label='+/- 3 std')
-
 plt.plot(x_.data.numpy(), y_.data.numpy(), c='grey', label='truth')
 plt.legend()
 plt.tight_layout()
