@@ -129,7 +129,7 @@ for j,x_j in enumerate(x_):
     for p in net.parameters():    
         g.append(torch.flatten(gradient(pred_j, p)))
     J = torch.cat(g, dim=0).unsqueeze(0)  #shape (64, 32*in_channels, 224, 224)
-    std.append((J @ H @ J.t())**0.5)
+    std.append((J @ H @ J.t())**0.5 + sigma)
 
 
 pred_mean = net.forward(x_).data.numpy().squeeze(1)
