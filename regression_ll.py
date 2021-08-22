@@ -41,30 +41,6 @@ class Net(torch.nn.Module):
         x = self.fc4(x)  # linear output
         return x
 
-# model with one specific layer
-class CurrentLayer(torch.nn.Module):
-    # Wrap any model to get the response of an intermediate layer
-    def __init__(self, model, layer=None):
-        """
-        model: PyTorch model
-        layer: int, which model response layers to output
-        """
-        super().__init__()
-        features = list(model.modules())[1:]
-        self.features = torch.nn.ModuleList(features).eval()
-
-        if layer is None:
-            layer = len(self.features)
-        self.layer = layer
-
-    def forward(self, x):
-        # Propagates input through each layer of model until self.layer, at which point it returns that layer's output
-        for ii, mdl in enumerate(self.features):
-            x = mdl(x)
-            if ii == self.layer:
-                return x
-
-
 # backward Jacobian: derivative of outputs with respect to weights
 def gradient(y, x, grad_outputs=None):
     """Compute dy/dx @ grad_outputs"""
@@ -123,12 +99,12 @@ x_ = Variable(x_)
 y_ = Variable(y_)
 
 std = []
-for j,x_j in enumerate(x_):
+for x_j in x_:
     g = []
     pred_j = net.forward(x_j)  
     for p in net.parameters():    
         g.append(torch.flatten(gradient(pred_j, p)))
-    J = torch.cat(g, dim=0).unsqueeze(0)  #shape (64, 32*in_channels, 224, 224)
+    J = torch.cat(g, dim=0).unsqueeze(0) 
     std.append((J @ H @ J.t())**0.5 + sigma)
 
 
