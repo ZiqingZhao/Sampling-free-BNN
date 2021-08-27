@@ -49,6 +49,18 @@ def gradient(y, x, grad_outputs=None):
     grad = torch.autograd.grad(y, [x], grad_outputs = grad_outputs, create_graph=True, retain_graph=True, allow_unused=True)[0]
     return grad
 
+def jacobian(y, x):
+    '''
+    Compute dy/dx = dy/dx @ grad_outputs; 
+    y: output, batch_size * class_number
+    x: parameter
+    '''
+    jac = torch.zeros(y.shape[0], torch.flatten(x).shape[0])
+    for i in range(y.shape[0]):
+        grad_outputs = torch.zeros_like(y)
+        grad_outputs[i] = 1
+        jac[i,:] = torch.flatten(gradient(y, x, grad_outputs = grad_outputs))
+    return jac
 
 torch.manual_seed(2)    # reproducible
 
@@ -83,14 +95,14 @@ add = 2
 multiply = 100 
 estimator.invert(add, multiply)
 
-for i,layer in enumerate(list(net.modules())[1:]):
+for i,layer in enumerate(list(estimator.model.modules())[1:]):
     if layer in estimator.state:
         Q_i = estimator.inv_state[layer][0]
         H_i = estimator.inv_state[layer][1]      
-    if i==0:
-        H = torch.kron(Q_i,H_i)
-    else:
-        H = torch.block_diag(H,torch.kron(Q_i,H_i))
+        if i==0:
+            H = torch.kron(Q_i,H_i)
+        else:
+            H = torch.block_diag(H,torch.kron(Q_i,H_i))
 
 
 x_ = torch.unsqueeze(torch.linspace(-6, 6), dim=1)  # x data (tensor), shape=(100, 1)
@@ -103,7 +115,7 @@ for x_j in x_:
     g = []
     pred_j = net.forward(x_j)  
     for p in net.parameters():    
-        g.append(torch.flatten(gradient(pred_j, p)))
+        g.append(torch.flatten(jacobian(pred_j, p)))
     J = torch.cat(g, dim=0).unsqueeze(0) 
     std.append((J @ H @ J.t())**0.5 + sigma)
 
