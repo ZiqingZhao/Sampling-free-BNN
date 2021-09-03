@@ -5,7 +5,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
-parent = os.path.dirname(current)
+parent = os.path.dirname(os.path.dirname(current))
 sys.path.append(parent)
 
 # Standard imports
@@ -58,6 +58,8 @@ if __name__ == '__main__':
     models_dir = 'theta'
     results_dir = 'results'
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    parent = os.path.dirname(os.path.dirname(current))
+    path = parent + "/data"
     # load and normalize MNIST
     new_mirror = 'https://ossci-datasets.s3.amazonaws.com/mnist'
     datasets.MNIST.resources = [
@@ -65,14 +67,14 @@ if __name__ == '__main__':
         for url, md5 in datasets.MNIST.resources
     ]
 
-    train_set = datasets.MNIST(root="../data",
+    train_set = datasets.MNIST(root=path,
                                            train=True,
                                            transform=transforms.ToTensor(),
                                            download=True)
     train_loader = DataLoader(train_set, batch_size=32)
 
     # And some for evaluating/testing
-    test_set = datasets.MNIST(root="../data",
+    test_set = datasets.MNIST(root=path,
                                           train=False,
                                           transform=transforms.ToTensor(),
                                           download=True)
@@ -108,15 +110,8 @@ if __name__ == '__main__':
     multiply = 200
     estimator.invert(add, multiply)
     
-    for i,layer in enumerate(list(estimator.model.modules())[1:]):
-        if layer in estimator.state:
-            Q_i = estimator.inv_state[layer][0]
-            H_i = estimator.inv_state[layer][1]      
-            if i==0:
-                H = torch.kron(Q_i,H_i)
-            else:
-                H = torch.block_diag(H,torch.kron(Q_i,H_i))
 
+    # test image
     targets = torch.Tensor()
     kfac_prediction = torch.Tensor().to(device)
     kfac_uncertainty = torch.Tensor().to(device)
@@ -125,14 +120,21 @@ if __name__ == '__main__':
         # prediction mean, equals to the MAP output 
         pred_mean = torch.nn.functional.softmax(net.model(images.to(device)) ,dim=1)        
         # compute prediction variance  
-        grad_outputs = torch.zeros_like(pred_mean)
+        pred_std = 0
         idx  = np.argmax(pred_mean.cpu().detach().numpy(), axis=1)
+        grad_outputs = torch.zeros_like(pred_mean)
         grad_outputs[:,idx] = 1
-        g = []
-        for p in net.model.parameters():    
-            g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
-        J = torch.cat(g, dim=0).unsqueeze(0) 
-        pred_std = torch.abs(J @ H @ J.t())
+        for layer in list(estimator.model.modules())[1:]:
+            g = []
+            if layer in estimator.state:
+                Q_i = estimator.inv_state[layer][0]
+                H_i = estimator.inv_state[layer][1] 
+                for p in layer.parameters():    
+                    g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
+                J_i = torch.cat(g, dim=0).unsqueeze(0) 
+                H = torch.kron(Q_i,H_i)
+                pred_std += torch.abs(J_i @ H @ J_i.t()) 
+                del J_i, H
         const = 2*np.e*np.pi 
         entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
         # ground truth
@@ -143,24 +145,34 @@ if __name__ == '__main__':
     print(f"KFAC Accuracy: {100 * np.mean(np.argmax(kfac_prediction.cpu().detech().numpy(), axis=1) == targets.numpy()):.2f}%")
     print(f"Mean KFAC Entropy:{kfac_uncertainty.mean()}%")
     
+
+    # noise image
     res_uncertainty = torch.Tensor().to(device)
     for i in range(10000):
         noise = torch.randn_like(images)
         pred_mean = torch.nn.functional.softmax(net.model(noise.to(device)) ,dim=1)        
         # compute prediction variance  
-        grad_outputs = torch.zeros_like(pred_mean)
+        pred_std = 0
         idx  = np.argmax(pred_mean.cpu().detach().numpy(), axis=1)
+        grad_outputs = torch.zeros_like(pred_mean)
         grad_outputs[:,idx] = 1
-        g = []
-        for p in net.model.parameters():    
-            g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
-        J = torch.cat(g, dim=0).unsqueeze(0) 
-        pred_std = torch.abs(J @ H @ J.t())
+        for layer in list(estimator.model.modules())[1:]:
+            g = []
+            if layer in estimator.state:
+                Q_i = estimator.inv_state[layer][0]
+                H_i = estimator.inv_state[layer][1] 
+                for p in layer.parameters():    
+                    g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
+                J_i = torch.cat(g, dim=0).unsqueeze(0) 
+                H = torch.kron(Q_i,H_i)
+                pred_std += torch.abs(J_i @ H @ J_i.t()) 
+                del J_i, H  
         const = 2*np.e*np.pi 
         entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
         res_uncertainty = torch.cat([res_uncertainty, entropy]) 
     print(f"Mean Noise Entropy:{res_uncertainty.mean()}%")
     
+
     # calibration
     ece_nn = calibration_curve(sgd_predictions.cpu().numpy(), sgd_labels.numpy())[0]
     ece_bnn = calibration_curve(kfac_prediction.cpu().numpy(), targets.numpy())[0]
