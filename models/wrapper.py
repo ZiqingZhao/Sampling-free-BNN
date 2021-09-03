@@ -9,18 +9,21 @@ import torch.nn.functional as F
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 5, 5)  # bs x 1 x 28 x 28 -> bs x 5 x 24 x 24
-        self.pool = nn.MaxPool2d(2, 2)  # bs x 5 x 24 x 24 -> bs x 5 x 12 x 12
-        self.conv2 = nn.Conv2d(5, 10, 5)  # bs x 10 x 8 x 8
-        self.fc1 = nn.Linear(10 * 4 * 4, 80)
-        self.fc2 = nn.Linear(80, 10)
+        
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=3, kernel_size=3, stride=1)  # bs x 1 x 28 x 28 -> bs x 3 x 26 x 26
+        self.pool = nn.MaxPool2d(2, 2)  # bs x 3 x 26 x 26 -> bs x 3 x 13 x 13
+        self.conv2 = nn.Conv2d(in_channels=3, out_channels=6, kernel_size=3, stride=2)  # bs x 6 x 6 x 6
+        self.fc1 = nn.Linear(6 * 3 * 3, 10)
+        
+       
 
     def forward(self, x):
+        
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
-        x = torch.flatten(x, 1)  # flatten all dimensions except batch: bs x 160
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch: bs x 24
+        x = self.fc1(x)
+        
         return x
 
 
@@ -37,10 +40,10 @@ class BaseNet(object):
     def create_net(self):
         torch.manual_seed(42)
         if self.device == 'cuda':
-            torch.cuda.manual_seed(42)
+            torch.cuda.manual_seed(42)  
         self.model = Net()
         if self.device == 'cuda':
-            self.model.cuda()
+            self.model.to(torch.device('cuda'))
         print('Total params: %.2fM' % (self.get_nb_parameters() / 1000000.0))
 
     def create_opt(self):

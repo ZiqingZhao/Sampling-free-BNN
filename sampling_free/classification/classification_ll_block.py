@@ -1,6 +1,7 @@
 from re import X
 import sys
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
@@ -25,6 +26,13 @@ from models.curvatures import BlockDiagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
 from models import plot
 
+def get_near_psd(A, epsilon):
+    C = (A + A.T)/2
+    eigval, eigvec = torch.linalg.eig(C.to(torch.double))
+    eigval[eigval.real < epsilon] = epsilon
+    return eigvec @ (torch.diag(eigval)) @ eigvec.t()
+
+
 def gradient(y, x, grad_outputs=None):
     """Compute dy/dx @ grad_outputs"""
     if grad_outputs is None:
@@ -42,10 +50,11 @@ def jacobian(y, x, device):
     for i in range(y.shape[1]):
         grad_outputs = torch.zeros_like(y)
         grad_outputs[:,i] = 1
-        jac[i,:] = torch.flatten(gradient(y, x, grad_outputs = grad_outputs))
+        jac[i,:] = torch.flatten(gradient(y, x, grad_outputs))
     return jac
 
 if __name__ == '__main__':
+    
     models_dir = 'theta'
     results_dir = 'results'
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -71,14 +80,17 @@ if __name__ == '__main__':
 
     # Train the model
     net = BaseNet(lr=1e-3, epoch=3, batch_size=32, device=device)
+    #net.load(models_dir + '/theta_best.dat')
     criterion = nn.CrossEntropyLoss().to(device)
     net.train(train_loader, criterion)
     sgd_predictions, sgd_labels = net.eval(test_loader)
-    #net.save(models_dir + '/theta_best.dat')
+    
     print(f"MAP Accuracy: {100 * np.mean(np.argmax(sgd_predictions.cpu().numpy(), axis=1) == sgd_labels.numpy()):.2f}%")
 
     # compute the Kronecker factored FiM
     kfac = KFAC(net.model)
+    #kfac.load(models_dir + '/kfac.dat')
+    
     for images, labels in tqdm(train_loader):
         logits = net.model(images.to(device))
         dist = torch.distributions.Categorical(logits=logits)
@@ -88,12 +100,12 @@ if __name__ == '__main__':
         net.model.zero_grad()
         loss.backward()
         kfac.update(batch_size=images.size(0))
-
+    
 
     # inversion of H and Q
     estimator = kfac
-    add = 1e15
-    multiply = 1e20
+    add = 1
+    multiply = 200
     estimator.invert(add, multiply)
     
     for i,layer in enumerate(list(estimator.model.modules())[1:]):
@@ -104,29 +116,50 @@ if __name__ == '__main__':
                 H = torch.kron(Q_i,H_i)
             else:
                 H = torch.block_diag(H,torch.kron(Q_i,H_i))
-    H_hat = 0.5*(H + H.t())
 
-    targets = torch.LongTensor()
-    kfac_prediction = torch.LongTensor().to(device)
+    targets = torch.Tensor()
+    kfac_prediction = torch.Tensor().to(device)
+    kfac_uncertainty = torch.Tensor().to(device)
     #mean_predictions, labels = net.eval(test_loader)
     for images,labels in tqdm(test_loader):
         # prediction mean, equals to the MAP output 
         pred_mean = torch.nn.functional.softmax(net.model(images.to(device)) ,dim=1)        
         # compute prediction variance  
+        grad_outputs = torch.zeros_like(pred_mean)
+        idx  = np.argmax(pred_mean.cpu().detach().numpy(), axis=1)
+        grad_outputs[:,idx] = 1
         g = []
         for p in net.model.parameters():    
-            g.append(jacobian(pred_mean, p, device))
-        J = torch.cat(g, dim=1)          
-        pred_std = J @ H_hat @ J.t()
-        pred_std = 0.5*(pred_std + pred_std.t())
-        #generalize distribution of output
-        dist = torch.distributions.multivariate_normal.MultivariateNormal(pred_mean, pred_std)
+            g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
+        J = torch.cat(g, dim=0).unsqueeze(0) 
+        pred_std = torch.abs(J @ H @ J.t())
+        const = 2*np.e*np.pi 
+        entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
         # ground truth
         targets = torch.cat([targets, labels])  
-        # our prediction, based on sampling on the normal distribution
-        kfac_prediction = torch.cat([kfac_prediction, dist.sample()]) 
-    print(f"KFAC Accuracy: {100 * np.mean(np.argmax(kfac_prediction.cpu().numpy(), axis=1) == targets.numpy()):.2f}%")   
-     
+        # prediction, mean value of the gaussian distribution
+        kfac_prediction = torch.cat([kfac_prediction, pred_mean]) 
+        kfac_uncertainty = torch.cat([kfac_uncertainty, entropy]) 
+    print(f"KFAC Accuracy: {100 * np.mean(np.argmax(kfac_prediction.cpu().detech().numpy(), axis=1) == targets.numpy()):.2f}%")
+    print(f"Mean KFAC Entropy:{kfac_uncertainty.mean()}%")
+    
+    res_uncertainty = torch.Tensor().to(device)
+    for i in range(10000):
+        noise = torch.randn_like(images)
+        pred_mean = torch.nn.functional.softmax(net.model(noise.to(device)) ,dim=1)        
+        # compute prediction variance  
+        grad_outputs = torch.zeros_like(pred_mean)
+        idx  = np.argmax(pred_mean.cpu().detach().numpy(), axis=1)
+        grad_outputs[:,idx] = 1
+        g = []
+        for p in net.model.parameters():    
+            g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
+        J = torch.cat(g, dim=0).unsqueeze(0) 
+        pred_std = torch.abs(J @ H @ J.t())
+        const = 2*np.e*np.pi 
+        entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
+        res_uncertainty = torch.cat([res_uncertainty, entropy]) 
+    print(f"Mean Noise Entropy:{res_uncertainty.mean()}%")
     
     # calibration
     ece_nn = calibration_curve(sgd_predictions.cpu().numpy(), sgd_labels.numpy())[0]

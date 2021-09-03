@@ -1,7 +1,7 @@
 from re import X
 import sys
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 
 # From the repository
 from models.wrapper import BaseNet
-from models.curvatures import BlockDiagonal, KFAC, EFB, INF
+from models.curvatures import Diagonal, BlockDiagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
 from models import plot
 
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     print(f"MAP Accuracy: {100 * np.mean(np.argmax(sgd_predictions.cpu().numpy(), axis=1) == sgd_labels.numpy()):.2f}%")
 
     # compute the Kronecker factored FiM
-    kfac = KFAC(net.model)
+    diag = Diagonal(net.model)
     #kfac.load(models_dir + '/kfac.dat')
     
     for images, labels in tqdm(train_loader):
@@ -93,28 +93,27 @@ if __name__ == '__main__':
         loss = criterion(logits, labels)
         net.model.zero_grad()
         loss.backward()
-        kfac.update(batch_size=images.size(0))
+        diag.update(batch_size=images.size(0))
     
 
     # inversion of H and Q
-    estimator = kfac
+    estimator = diag
     add = 1
     multiply = 200
     estimator.invert(add, multiply)
+
     
+    h = []
     for i,layer in enumerate(list(estimator.model.modules())[1:]):
         if layer in estimator.state:
-            Q_i = estimator.inv_state[layer][0]
-            H_i = estimator.inv_state[layer][1]      
-            if i==0:
-                H = torch.kron(Q_i,H_i)
-            else:
-                H = torch.block_diag(H,torch.kron(Q_i,H_i))
-
+            H_i = estimator.inv_state[layer]
+            h.append(torch.flatten(H_i))
+    H = torch.cat(h, dim=0)
+    
     targets = torch.Tensor()
-    kfac_prediction = torch.Tensor().to(device)
-    kfac_uncertainty = torch.Tensor().to(device)
-    #mean_predictions, labels = net.eval(test_loader)
+    diag_prediction = torch.Tensor().to(device)
+    diag_uncertainty = torch.Tensor().to(device)
+
     for images,labels in tqdm(test_loader):
         # prediction mean, equals to the MAP output 
         pred_mean = torch.nn.functional.softmax(net.model(images.to(device)) ,dim=1)        
@@ -126,19 +125,23 @@ if __name__ == '__main__':
         for p in net.model.parameters():    
             g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
         J = torch.cat(g, dim=0).unsqueeze(0) 
-        pred_std = torch.abs(J @ H @ J.t())
+        pred_std = torch.abs(J * H * J).sum()
+        del J
+        torch.cuda.empty_cache()
         const = 2*np.e*np.pi 
         entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
         # ground truth
         targets = torch.cat([targets, labels])  
         # prediction, mean value of the gaussian distribution
-        kfac_prediction = torch.cat([kfac_prediction, pred_mean]) 
-        kfac_uncertainty = torch.cat([kfac_uncertainty, entropy]) 
-    print(f"KFAC Accuracy: {100 * np.mean(np.argmax(kfac_prediction.cpu().detech().numpy(), axis=1) == targets.numpy()):.2f}%")
-    print(f"Mean KFAC Entropy:{kfac_uncertainty.mean()}%")
-    
+        diag_prediction = torch.cat([diag_prediction, pred_mean]) 
+        diag_uncertainty = torch.cat([diag_uncertainty, entropy]) 
+        
+    print(f"Diagonal Accuracy: {100 * np.mean(np.argmax(diag_prediction.cpu().detach().numpy(), axis=1) == targets.numpy()):.2f}%")
+    print(f"Mean Diagonal Entropy: {diag_uncertainty.mean()}")
+    # -0.64
+
     res_uncertainty = torch.Tensor().to(device)
-    for i in range(10000):
+    for i in tqdm(range(10000)):
         noise = torch.randn_like(images)
         pred_mean = torch.nn.functional.softmax(net.model(noise.to(device)) ,dim=1)        
         # compute prediction variance  
@@ -149,28 +152,11 @@ if __name__ == '__main__':
         for p in net.model.parameters():    
             g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
         J = torch.cat(g, dim=0).unsqueeze(0) 
-        pred_std = torch.abs(J @ H @ J.t())
+        pred_std = torch.abs(J * H * J).sum()
+        del J
+        torch.cuda.empty_cache()
         const = 2*np.e*np.pi 
         entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
         res_uncertainty = torch.cat([res_uncertainty, entropy]) 
-    print(f"Mean Noise Entropy:{res_uncertainty.mean()}%")
-    
-    # calibration
-    ece_nn = calibration_curve(sgd_predictions.cpu().numpy(), sgd_labels.numpy())[0]
-    ece_bnn = calibration_curve(kfac_prediction.cpu().numpy(), targets.numpy())[0]
-    print(f"ECE NN: {100 * ece_nn:.2f}%, ECE BNN: {100 * ece_bnn:.2f}%")
-
-    fig, ax = plt.subplots(ncols=2, nrows=1, figsize=(12, 6), tight_layout=True)
-    ax[0].set_title('SGD', fontsize=16)
-    ax[1].set_title('KFAC-Laplace', fontsize=16)
-    plot.reliability_diagram(sgd_predictions.cpu().numpy(), sgd_labels.numpy(), axis=ax[0])
-    plot.reliability_diagram(kfac_prediction.cpu().numpy(), targets.numpy(), axis=ax[1])
-    plt.savefig(results_dir+'reliability_diagram.png')
-
-    fig, ax = plt.subplots(figsize=(12, 7), tight_layout=True)
-    c1 = next(ax._get_lines.prop_cycler)['color']
-    c2 = next(ax._get_lines.prop_cycler)['color']
-    plot.calibration(sgd_predictions.cpu().numpy(), sgd_labels.numpy(), color=c1, label="SGD", axis=ax)
-    plot.calibration(kfac_prediction.cpu().numpy(), targets.numpy(), color=c2, label="KFAC-Laplace", axis=ax)
-    plt.savefig(results_dir+'calibration.png')
-     
+    print(f"Mean Noise Entropy: {res_uncertainty.mean()}")
+    # 2.86
