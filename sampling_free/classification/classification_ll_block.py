@@ -114,7 +114,7 @@ if __name__ == '__main__':
     # test image
     targets = torch.Tensor()
     kfac_prediction = torch.Tensor().to(device)
-    kfac_uncertainty = torch.Tensor().to(device)
+    kfac_entropy_lst  = []
     #mean_predictions, labels = net.eval(test_loader)
     for images,labels in tqdm(test_loader):
         # prediction mean, equals to the MAP output 
@@ -127,28 +127,30 @@ if __name__ == '__main__':
         for layer in list(estimator.model.modules())[1:]:
             g = []
             if layer in estimator.state:
-                Q_i = estimator.inv_state[layer][0]
-                H_i = estimator.inv_state[layer][1] 
-                for p in layer.parameters():    
-                    g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
-                J_i = torch.cat(g, dim=0).unsqueeze(0) 
-                H = torch.kron(Q_i,H_i)
-                pred_std += torch.abs(J_i @ H @ J_i.t()) 
-                del J_i, H
+                if torch.cuda.is_available():
+                    Q_i = estimator.inv_state[layer][0]
+                    H_i = estimator.inv_state[layer][1] 
+                    for p in layer.parameters():    
+                        g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
+                    J_i = torch.cat(g, dim=0).unsqueeze(0) 
+                    H = torch.kron(Q_i,H_i)
+                    pred_std += torch.abs(J_i @ H @ J_i.t()).item()
+        # uncertainty
         const = 2*np.e*np.pi 
-        entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
+        entropy = 0.5 * np.log2(const * pred_std)
+        kfac_entropy_lst.append(entropy) 
+        kfac_uncertainty = np.array(kfac_entropy_lst)
         # ground truth
         targets = torch.cat([targets, labels])  
         # prediction, mean value of the gaussian distribution
         kfac_prediction = torch.cat([kfac_prediction, pred_mean]) 
-        kfac_uncertainty = torch.cat([kfac_uncertainty, entropy]) 
-    print(f"KFAC Accuracy: {100 * np.mean(np.argmax(kfac_prediction.cpu().detech().numpy(), axis=1) == targets.numpy()):.2f}%")
-    print(f"Mean KFAC Entropy:{kfac_uncertainty.mean()}%")
-    
+    print(f"KFAC Accuracy: {100 * np.mean(np.argmax(kfac_prediction.cpu().detach().numpy(), axis=1) == targets.numpy()):.2f}%")
+    print(f"Mean KFAC Entropy:{np.mean(kfac_uncertainty)}%")
+    # kfac entropy: -1.7657 bits
 
     # noise image
-    res_uncertainty = torch.Tensor().to(device)
-    for i in range(10000):
+    res_entropy_lst = []
+    for i in tqdm(range(10000)):
         noise = torch.randn_like(images)
         pred_mean = torch.nn.functional.softmax(net.model(noise.to(device)) ,dim=1)        
         # compute prediction variance  
@@ -165,13 +167,13 @@ if __name__ == '__main__':
                     g.append(torch.flatten(gradient(pred_mean, p, grad_outputs=grad_outputs)))
                 J_i = torch.cat(g, dim=0).unsqueeze(0) 
                 H = torch.kron(Q_i,H_i)
-                pred_std += torch.abs(J_i @ H @ J_i.t()) 
-                del J_i, H  
+                pred_std += torch.abs(J_i @ H @ J_i.t()).item()
         const = 2*np.e*np.pi 
-        entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
-        res_uncertainty = torch.cat([res_uncertainty, entropy]) 
-    print(f"Mean Noise Entropy:{res_uncertainty.mean()}%")
-    
+        entropy = 0.5 * np.log2(const * pred_std)
+        res_entropy_lst.append(entropy) 
+        res_uncertainty = np.array(res_entropy_lst)
+    print(f"Mean Noise Entropy:{np.mean(res_uncertainty)}%")
+    # noise entropy: 1.8006 bits
 
     # calibration
     ece_nn = calibration_curve(sgd_predictions.cpu().numpy(), sgd_labels.numpy())[0]

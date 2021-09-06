@@ -4,7 +4,7 @@ import os
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
-parent = os.path.dirname(current)
+parent = os.path.dirname(os.path.dirname(current))
 sys.path.append(parent)
 
 
@@ -118,15 +118,6 @@ add = 2
 multiply = 100 
 estimator.invert(add, multiply)
 
-for i,layer in enumerate(list(net.modules())[1:]):
-    if layer in estimator.state:
-        Q_i = estimator.inv_state[layer][0]
-        H_i = estimator.inv_state[layer][1]      
-    if i==0:
-        H = torch.kron(Q_i,H_i)
-    else:
-        H = torch.block_diag(H,torch.kron(Q_i,H_i))
-
 
 x_ = torch.unsqueeze(torch.linspace(-6, 6), dim=1)  # x data (tensor), shape=(100, 1)
 y_ = x_.pow(3)      
@@ -137,10 +128,18 @@ std = []
 for j,x_j in enumerate(x_):
     g = []
     pred_j = net.forward(x_j)  
-    for p in net.parameters():    
-        g.append(torch.flatten(jacobian(pred_j, p)))
-    J = torch.cat(g, dim=0).unsqueeze(0)  #shape (64, 32*in_channels, 224, 224)
-    std.append((J @ H @ J.t())**0.5 + sigma)
+    std_j = 0
+    for layer in list(estimator.model.modules())[1:]:
+        g = []
+        if layer in estimator.state:
+            Q_i = estimator.inv_state[layer][0]
+            H_i = estimator.inv_state[layer][1] 
+            for p in layer.parameters():    
+                g.append(torch.flatten(jacobian(pred_j, p)))
+            J_i = torch.cat(g, dim=0).unsqueeze(0) 
+            H = torch.kron(Q_i,H_i)
+            std_j += torch.abs(J_i @ H @ J_i.t()).item()
+    std.append(std_j**0.5 + sigma)
 
 
 pred_mean = net.forward(x_).data.numpy().squeeze(1)

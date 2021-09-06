@@ -138,7 +138,7 @@ if __name__ == '__main__':
         
     print(f"Diagonal Accuracy: {100 * np.mean(np.argmax(diag_prediction.cpu().detach().numpy(), axis=1) == targets.numpy()):.2f}%")
     print(f"Mean Diagonal Entropy: {diag_uncertainty.mean()}")
-    # -0.64
+    # kfac entropy: -0.64
 
     res_uncertainty = torch.Tensor().to(device)
     for i in tqdm(range(10000)):
@@ -159,4 +159,4 @@ if __name__ == '__main__':
         entropy = 0.5 * torch.log2(const * pred_std.unsqueeze(0))
         res_uncertainty = torch.cat([res_uncertainty, entropy]) 
     print(f"Mean Noise Entropy: {res_uncertainty.mean()}")
-    # 2.86
+    # noise entropy: 2.86
