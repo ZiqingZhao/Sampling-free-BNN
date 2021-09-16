@@ -53,7 +53,7 @@ class BaseNet(object):
         torch.manual_seed(42)
         if self.device == 'cuda':
             torch.cuda.manual_seed(42)  
-        self.model = Net()
+        self.model = Net_large()
         if self.device == 'cuda':
             self.model.to(torch.device('cuda'))
         print('Total params: %.2fK' % (self.get_nb_parameters() / 1000.0))
