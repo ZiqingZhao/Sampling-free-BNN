@@ -1,7 +1,7 @@
 from re import X
 import sys
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
@@ -13,7 +13,7 @@ import numpy as np
 from tqdm import tqdm
 import seaborn as sns
 from matplotlib import pyplot as plt
-import PIL.ImageOps  
+from PIL import Image, ImageOps  
 
 import torch
 import torch.nn as nn
@@ -66,9 +66,6 @@ def plot_tensors(tensor):
     ax.set_yticklabels([])
    
 
-
-models_dir = 'theta'
-results_dir = 'results'
 device = "cuda" if torch.cuda.is_available() else "cpu"
 parent = os.path.dirname(current)
 path = parent + "/data"
@@ -132,39 +129,40 @@ add = 1
 multiply = 200
 diag = torch.diag(H.new(H.shape[0]).fill_(add ** 0.5))
 reg = multiply ** 0.5 * H + diag
-H_inv = torch.inverse(reg)
+H_inv = torch.inverse(reg).cpu()
 
 
 sum_diag = torch.diag(H_inv).abs().sum().item()
-torch.abs(H_inv).sum().item()
 sum_non_diag = torch.abs(H_inv-torch.diag(torch.diag(H_inv))).sum()
 print(f"sum of diagonal: {sum_diag:.2f}")
 print(f"sum of non-diagonal: {sum_non_diag:.2f}")
 
+min = H_inv.abs().min().item()
+max = H_inv.abs().max().item()
+H_norm = (H_inv.abs() - min) / (max-min)
 
-H_abs = H_inv.abs().unsqueeze(2) #shape: 15080*15080*1
-mean, std = H_abs.mean(), H_abs.std()
-trans = transforms.Normalize(mean=mean, std=std)
-H_norm = trans(H_abs).squeeze(2) #normalize H to [0,1], shape:15080*15080
+PIL_image = Image.fromarray(np.uint8(255*torch.sqrt(H_norm[:3000,:3000]).numpy())).convert('RGB')
+PIL_image.save(parent+'/results/H_inv_15k_sqrt.png')
+
+
+'''
 ax1 = sns.heatmap(H_norm.cpu().numpy(), vmin=0, vmax=1)
 fig1 = ax1.get_figure()
-fig1.savefig(parent+'/results/H_inv_15k_norm.png')
-    
+fig1.savefig(parent+'/results/H_inv_15k_heatmap.png')
+ 
 ax2 = transforms.ToPILImage()(H_norm)
 ax2 = PIL.ImageOps.invert(ax2)
 ax2.save(parent+'/results/H_inv_15k.png')
+'''
 
-"""
+'''
 748
 H_inv
 sum of diagonal: 605.26
 sum of non-diagonal: 1609.85
 
-
-151304.75
 15080
 H_inv 
 sum of diagonal: 14879.16
 sum of non-diagonal: 63296.37
-
-"""
+'''
