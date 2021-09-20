@@ -28,6 +28,7 @@ from models.utilities import calibration_curve
 from models.plot import *
 from models.wrapper import *
 
+
 def get_near_psd(A, epsilon):
     C = (A + A.T)/2
     eigval, eigvec = torch.linalg.eig(C.to(torch.double))
@@ -55,15 +56,6 @@ def jacobian(y, x, device):
         jac[i,:] = torch.flatten(gradient(y, x, grad_outputs))
     return jac
 
-def plot_tensors(tensor):
-    if not tensor.ndim == 2:
-        raise Exception("assumes a 2D tensor")
-    fig = plt.figure(figsize=(10,10))
-    ax = fig.add_subplot(1,1,1)
-    ax.imshow(tensor.cpu().numpy())
-    ax.axis('off')
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
    
 # file path
 parent = os.path.dirname(current)
@@ -97,11 +89,12 @@ test_set = datasets.MNIST(root=data_path,
                                         download=True)
 test_loader = DataLoader(test_set, batch_size=1)
 
-std = [i/20 for i in range(1,11)]
+N = 200
+std = [i/30 for i in range(1,11)]
 H_eig = []
 H_inv_eig = []
 for i in range(10):
-    print(f"Iteration: {i}")
+    print(f"std: {std[i]}")
     # Train the model
     net = BaseNet_750()
     net.weight_init(std[i])
@@ -140,11 +133,29 @@ for i in range(10):
         H = H_loss if H == None else H + H_loss
 
     H = H/len(test_loader) 
-    eig = torch.linalg.eigvals(H).real.max().item()
-    print(f"Eigenvalue: {eig}")
-    H_eig.append(eig)
 
-plt.plot(np.array(std),np.array(H_eig))   
+    #calculate the pseudo inverse of H
+    diag = torch.diag(H.new(H.shape[0]).fill_(std[i]))
+    H_inv = N * (torch.linalg.pinv(H) + diag)
+    
+    # calculate the eigenvalues
+    eig = torch.linalg.eigvals(H).real.max().item()
+    eig_inv = torch.linalg.eigvals(H_inv).real.max().item()
+    print(f"Maximum Eigenvalue of H: {eig}")
+    print(f"Maximum Eigenvalue of H_inv: {eig_inv}")
+    H_eig.append(eig)
+    H_inv_eig.append(eig_inv)
+
+# plot the results
+plt.figure(figsize=(10,10))
+plt.plot(np.array(std)**2, np.array(H_eig), label='Hessian')   
+plt.plot(np.array(std)**2, np.array(H_inv_eig), label='Inverse of Hessian')   
+plt.title('Maximum Eigenvalue of Hessian Matrix')
+plt.xlabel('tau')
+plt.ylabel('eigenvalue')
+plt.legend()
+plt.tight_layout()
+plt.show()
 
 """
 # inversion of H
