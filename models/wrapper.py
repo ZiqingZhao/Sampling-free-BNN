@@ -5,8 +5,49 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# define a Convolutional Neural Network
-class Net(nn.Module):
+
+def get_nb_parameters(model):
+    print('Total params: %.2fK' % (np.sum(p.numel() for p in model.parameters()) / 1000.0))
+
+
+def save(model, filename):
+    print('Writting %s\n' % filename)
+    torch.save(model.state_dict(), filename)
+
+
+def load(model, filename):
+    print('Reading %s\n' % filename)
+    model.load_state_dict(torch.load(filename))
+
+
+def train(model, device, data, criterion, optimizer, epochs):
+    model.train()
+    for epoch in range(epochs):
+        for images, labels in tqdm(data):
+            logits = model(images.to(device))
+            loss = criterion(logits, labels.to(device))
+            model.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+
+def eval(model, device, data):
+    model.eval()
+    logits = torch.Tensor().to(device)
+    targets = torch.LongTensor()
+
+    with torch.no_grad():
+        for images, labels in tqdm(data):
+            logits = torch.cat([logits, model(images.to(device))])
+            targets = torch.cat([targets, labels])
+    return torch.nn.functional.softmax(logits, dim=1), targets
+
+
+def accuracy(predictions, labels):
+    print(f"Accuracy: {100 * np.mean(np.argmax(predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
+
+
+class BaseNet_750(nn.Module):
     def __init__(self):
         super().__init__()     
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=3, kernel_size=3, stride=1)  # bs x 1 x 28 x 28 -> bs x 3 x 26 x 26
@@ -14,7 +55,6 @@ class Net(nn.Module):
         self.conv2 = nn.Conv2d(in_channels=3, out_channels=6, kernel_size=3, stride=2)  # bs x 6 x 6 x 6
         self.fc1 = nn.Linear(6 * 3 * 3, 10)
         
-
     def forward(self, x):        
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
@@ -22,7 +62,7 @@ class Net(nn.Module):
         x = self.fc1(x)       
         return x
 
-class Net_large(nn.Module):
+class BaseNet_15k(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 5, 5)  # bs x 1 x 28 x 28 -> bs x 5 x 24 x 24
@@ -39,68 +79,34 @@ class Net_large(nn.Module):
         x = self.fc2(x)
         return x
 
-class BaseNet(object):
-    def __init__(self, lr=1e-3, epoch=3, batch_size=32, device='cuda'):
-        print('Creating Net...')
-        self.lr = lr
-        self.epoch = epoch
-        self.batch_size = batch_size
-        self.device = device
-        self.create_net()
-        self.create_opt()
+class LeNet5(nn.Module):
+    def __init__(self):
+        super(LeNet5, self).__init__()
+        self.conv1 = nn.Conv2d(1, 6, 5)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(2)
+        self.fc1 = nn.Linear(256, 120)
+        self.relu3 = nn.ReLU()
+        self.fc2 = nn.Linear(120, 84)
+        self.relu4 = nn.ReLU()
+        self.fc3 = nn.Linear(84, 10)
+        self.relu5 = nn.ReLU()
 
-    def create_net(self):
-        torch.manual_seed(42)
-        if self.device == 'cuda':
-            torch.cuda.manual_seed(42)  
-        self.model = Net_large()
-        if self.device == 'cuda':
-            self.model.to(torch.device('cuda'))
-        print('Total params: %.2fK' % (self.get_nb_parameters() / 1000.0))
-
-    def create_opt(self):
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, momentum=0.9)
-
-    def get_nb_parameters(self):
-        return np.sum(p.numel() for p in self.model.parameters())
-
-    def save(self, filename):
-        print('Writting %s\n' % filename)
-        torch.save({
-            'epoch': self.epoch,
-            'lr': self.lr,
-            'model': self.model,
-            'optimizer': self.optimizer}, filename)
-
-    def load(self, filename):
-        print('Reading %s\n' % filename)
-        state_dict = torch.load(filename)
-        self.epoch = state_dict['epoch']
-        self.lr = state_dict['lr']
-        self.model = state_dict['model']
-        self.optimizer = state_dict['optimizer']
-        print('  restoring epoch: %d, lr: %f' % (self.epoch, self.lr))
-        return self.epoch
-
-    def train(self, data, criterion):
-        self.model.train()
-        for epoch in range(self.epoch):
-            for images, labels in tqdm(data):
-                logits = self.model(images.to(self.device))
-                loss = criterion(logits, labels.to(self.device))
-                self.model.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-
-    def eval(self, data):
-        self.model.eval()
-        logits = torch.Tensor().to(self.device)
-        targets = torch.LongTensor()
-        with torch.no_grad():
-            for images, labels in tqdm(data):
-                logits = torch.cat([logits, self.model(images.to(self.device))])
-                targets = torch.cat([targets, labels])
-        return torch.nn.functional.softmax(logits, dim=1), targets
-
-    def accuracy(self, predictions, labels):
-        print(f"Accuracy: {100 * np.mean(np.argmax(predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
+    def forward(self, x):
+        y = self.conv1(x)
+        y = self.relu1(y)
+        y = self.pool1(y)
+        y = self.conv2(y)
+        y = self.relu2(y)
+        y = self.pool2(y)
+        y = y.view(y.shape[0], -1)
+        y = self.fc1(y)
+        y = self.relu3(y)
+        y = self.fc2(y)
+        y = self.relu4(y)
+        y = self.fc3(y)
+        y = self.relu5(y)
+        return y

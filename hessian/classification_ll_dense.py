@@ -1,7 +1,7 @@
 from re import X
 import sys
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
@@ -23,10 +23,10 @@ from torchvision import transforms, datasets
 from torch.utils.data import DataLoader
 
 # From the repository
-from models.wrapper import BaseNet
 from models.curvatures import BlockDiagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
-from models import plot
+from models.plot import *
+from models.wrapper import *
 
 def get_near_psd(A, epsilon):
     C = (A + A.T)/2
@@ -65,10 +65,18 @@ def plot_tensors(tensor):
     ax.set_xticklabels([])
     ax.set_yticklabels([])
    
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# file path
 parent = os.path.dirname(current)
-path = parent + "/data"
+data_path = parent + "/data/"
+model_path = parent + "/theta/"
+result_path = parent + "/results/Hessian/"
+
+# choose the device
+device = "cuda" if torch.cuda.is_available() else "cpu"
+torch.manual_seed(42)
+if device == 'cuda':
+    torch.cuda.manual_seed(42) 
+
 # load and normalize MNIST
 new_mirror = 'https://ossci-datasets.s3.amazonaws.com/mnist'
 datasets.MNIST.resources = [
@@ -76,43 +84,47 @@ datasets.MNIST.resources = [
     for url, md5 in datasets.MNIST.resources
 ]
 
-train_set = datasets.MNIST(root=path,
+train_set = datasets.MNIST(root=data_path,
                                         train=True,
                                         transform=transforms.ToTensor(),
                                         download=True)
 train_loader = DataLoader(train_set, batch_size=32)
 
 # And some for evaluating/testing
-test_set = datasets.MNIST(root=path,
+test_set = datasets.MNIST(root=data_path,
                                         train=False,
                                         transform=transforms.ToTensor(),
                                         download=True)
 test_loader = DataLoader(test_set, batch_size=1)
 
 # Train the model
-net = BaseNet(lr=1e-3, epoch=3, batch_size=32, device=device)
-#net.load(models_dir + '/theta_best.dat')
-criterion = nn.CrossEntropyLoss().to(device)
-net.train(train_loader, criterion)
-sgd_predictions, sgd_labels = net.eval(test_loader)
+net = LeNet5()
+if device == 'cuda': 
+    net.to(torch.device('cuda'))
+get_nb_parameters(net)
+criterion = torch.nn.CrossEntropyLoss().to(device)
+optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+train(net, device, train_loader, criterion, optimizer, epochs=3)
+save(net, model_path + 'LeNet5.dat')
+#load(net, model_path + 'LeNet5.dat')
 
-print(f"MAP Accuracy: {100 * np.mean(np.argmax(sgd_predictions.cpu().numpy(), axis=1) == sgd_labels.numpy()):.2f}%")
-
-
+# run on the testset
+sgd_predictions, sgd_labels = eval(net, device, test_loader)
+accuracy(sgd_predictions, sgd_labels)
 
 # update likelihood FIM
 H = None
 for images, labels in tqdm(test_loader):
-    logits = net.model(images.to(device))
+    logits = net(images.to(device))
     dist = torch.distributions.Categorical(logits=logits)
     # A rank-1 Kronecker factored FiM approximation.
     labels = dist.sample()
     loss = criterion(logits, labels)
-    net.model.zero_grad()
+    net.zero_grad()
     loss.backward()
             
     grads = []
-    for layer in list(net.model.modules())[1:]:
+    for layer in list(net.modules())[1:]:
         for p in layer.parameters():    
             J_p = torch.flatten(p.grad.view(-1)).unsqueeze(0)
             grads.append(J_p)
@@ -142,7 +154,7 @@ max = H_inv.abs().max().item()
 H_norm = (H_inv.abs() - min) / (max-min)
 
 PIL_image = Image.fromarray(np.uint8(255*torch.sqrt(H_norm[:3000,:3000]).numpy())).convert('RGB')
-PIL_image.save(parent+'/results/H_inv_15k_sqrt.png')
+PIL_image.save(result_path+'60k/H_inv_60k_sqrt.png')
 
 
 '''
@@ -165,4 +177,6 @@ sum of non-diagonal: 1609.85
 H_inv 
 sum of diagonal: 14879.16
 sum of non-diagonal: 63296.37
+
+60
 '''

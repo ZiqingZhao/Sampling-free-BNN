@@ -17,7 +17,6 @@ from torch.nn import Module
 from tqdm import tqdm
 from scipy.stats import entropy
 
-
 def get_eigenvalues(factors: List[Tensor],
                     verbose: bool = False) -> Tensor:
     """Computes the eigenvalues of KFAC, EFB or diagonal factors.
