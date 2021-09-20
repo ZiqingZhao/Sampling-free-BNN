@@ -97,51 +97,64 @@ test_set = datasets.MNIST(root=data_path,
                                         download=True)
 test_loader = DataLoader(test_set, batch_size=1)
 
-# Train the model
-net = LeNet5()
-if device == 'cuda': 
-    net.to(torch.device('cuda'))
-get_nb_parameters(net)
-criterion = torch.nn.CrossEntropyLoss().to(device)
-optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-train(net, device, train_loader, criterion, optimizer, epochs=3)
-save(net, model_path + 'LeNet5.dat')
-#load(net, model_path + 'LeNet5.dat')
+std = [i/20 for i in range(1,11)]
+H_eig = []
+H_inv_eig = []
+for i in range(10):
+    print(f"Iteration: {i}")
+    # Train the model
+    net = BaseNet_750()
+    net.weight_init(std[i])
+    if device == 'cuda': 
+        net.to(torch.device('cuda'))
+    get_nb_parameters(net)
+    criterion = torch.nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+    train(net, device, train_loader, criterion, optimizer, epochs=3)
+    # save(net, model_path + 'BaseNet_15k.dat')
+    # load(net, model_path + 'BaseNet_750.dat')
 
-# run on the testset
-sgd_predictions, sgd_labels = eval(net, device, test_loader)
-accuracy(sgd_predictions, sgd_labels)
+    # run on the testset
+    sgd_predictions, sgd_labels = eval(net, device, test_loader)
+    accuracy(sgd_predictions, sgd_labels)
 
-# update likelihood FIM
-H = None
-for images, labels in tqdm(test_loader):
-    logits = net(images.to(device))
-    dist = torch.distributions.Categorical(logits=logits)
-    # A rank-1 Kronecker factored FiM approximation.
-    labels = dist.sample()
-    loss = criterion(logits, labels)
-    net.zero_grad()
-    loss.backward()
-            
-    grads = []
-    for layer in list(net.modules())[1:]:
-        for p in layer.parameters():    
-            J_p = torch.flatten(p.grad.view(-1)).unsqueeze(0)
-            grads.append(J_p)
-    J_loss = torch.cat(grads, dim=1)
-    H_loss = J_loss.t() @ J_loss
-    H_loss.requires_grad = False
-    H = H_loss if H == None else H + H_loss
+    # update likelihood FIM
+    H = None
+    for images, labels in tqdm(test_loader):
+        logits = net(images.to(device))
+        dist = torch.distributions.Categorical(logits=logits)
+        # A rank-1 Kronecker factored FiM approximation.
+        labels = dist.sample()
+        loss = criterion(logits, labels)
+        net.zero_grad()
+        loss.backward()
+                
+        grads = []
+        for layer in list(net.modules())[1:]:
+            for p in layer.parameters():    
+                J_p = torch.flatten(p.grad.view(-1)).unsqueeze(0)
+                grads.append(J_p)
+        J_loss = torch.cat(grads, dim=1)
+        H_loss = J_loss.t() @ J_loss
+        H_loss.requires_grad = False
+        H = H_loss if H == None else H + H_loss
 
-H = H/len(test_loader)    
+    H = H/len(test_loader) 
+    eig = torch.linalg.eigvals(H).real.max().item()
+    print(f"Eigenvalue: {eig}")
+    H_eig.append(eig)
 
+plt.plot(np.array(std),np.array(H_eig))   
 
+"""
 # inversion of H
 add = 1
 multiply = 200
 diag = torch.diag(H.new(H.shape[0]).fill_(add ** 0.5))
 reg = multiply ** 0.5 * H + diag
 H_inv = torch.inverse(reg).cpu()
+0
+3,
 
 
 sum_diag = torch.diag(H_inv).abs().sum().item()
@@ -154,18 +167,8 @@ max = H_inv.abs().max().item()
 H_norm = (H_inv.abs() - min) / (max-min)
 
 PIL_image = Image.fromarray(np.uint8(255*torch.sqrt(H_norm[:3000,:3000]).numpy())).convert('RGB')
-PIL_image.save(result_path+'60k/H_inv_60k_sqrt.png')
+PIL_image.save(result_path+'15k/H_inv_15k_sqrt.png')
 
-
-'''
-ax1 = sns.heatmap(H_norm.cpu().numpy(), vmin=0, vmax=1)
-fig1 = ax1.get_figure()
-fig1.savefig(parent+'/results/H_inv_15k_heatmap.png')
- 
-ax2 = transforms.ToPILImage()(H_norm)
-ax2 = PIL.ImageOps.invert(ax2)
-ax2.save(parent+'/results/H_inv_15k.png')
-'''
 
 '''
 748
@@ -180,3 +183,4 @@ sum of non-diagonal: 63296.37
 
 60
 '''
+"""
