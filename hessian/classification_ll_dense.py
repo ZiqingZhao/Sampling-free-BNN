@@ -136,21 +136,36 @@ for i in range(10):
 
     #calculate the pseudo inverse of H
     diag = torch.diag(H.new(H.shape[0]).fill_(std[i]))
-    H_inv = N * (torch.linalg.pinv(H) + diag)
+    H_inv = torch.linalg.pinv(N * H + diag).cpu()
     
     # calculate the eigenvalues
-    eig = torch.linalg.eigvals(H).real.max().item()
-    eig_inv = torch.linalg.eigvals(H_inv).real.max().item()
-    print(f"Maximum Eigenvalue of H: {eig}")
-    print(f"Maximum Eigenvalue of H_inv: {eig_inv}")
+    eig = torch.linalg.eigvals(H).real
+    eig_inv = torch.linalg.eigvals(H_inv).real
+    print(f"Maximum Eigenvalue of H: {eig.max().item()}")
+    print(f"Maximum Eigenvalue of H_inv: {eig_inv.max().item()}")
     H_eig.append(eig)
     H_inv_eig.append(eig_inv)
 
+H_eig_min = []
+H_inv_eig_max = []
+for i in range(10):
+    H_eig_min.append(H_eig[i].min.item())
+    H_inv_eig_max.append(H_inv_eig[i].max.item())
+
+
 # plot the results
-plt.figure(figsize=(10,10))
-plt.plot(np.array(std)**2, np.array(H_eig), label='Hessian')   
-plt.plot(np.array(std)**2, np.array(H_inv_eig), label='Inverse of Hessian')   
-plt.title('Maximum Eigenvalue of Hessian Matrix')
+plt.figure(figsize=(5,5))
+plt.plot(np.log(np.array(std)**2), np.array(H_eig_min), label='Hessian')   
+plt.title('Minimum Eigenvalue of the Hessian Matrix')
+plt.xlabel('tau')
+plt.ylabel('eigenvalue')
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(5,5))
+plt.plot(np.log(np.array(std)**2), np.array(H_inv_eig_max), label='Inverse of Hessian')   
+plt.title('Maximum Eigenvalue of the Inverse Hessian Matrix')
 plt.xlabel('tau')
 plt.ylabel('eigenvalue')
 plt.legend()
@@ -164,8 +179,7 @@ multiply = 200
 diag = torch.diag(H.new(H.shape[0]).fill_(add ** 0.5))
 reg = multiply ** 0.5 * H + diag
 H_inv = torch.inverse(reg).cpu()
-0
-3,
+
 
 
 sum_diag = torch.diag(H_inv).abs().sum().item()
