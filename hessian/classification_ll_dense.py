@@ -149,15 +149,15 @@ for i in range(10):
 H_eig_min = []
 H_inv_eig_max = []
 for i in range(10):
-    H_eig_min.append(H_eig[i].min.item())
-    H_inv_eig_max.append(H_inv_eig[i].max.item())
+    H_eig_min.append(H_eig[i].min().item())
+    H_inv_eig_max.append(H_inv_eig[i].max().item())
 
 
 # plot the results
 plt.figure(figsize=(5,5))
 plt.plot(np.log(np.array(std)**2), np.array(H_eig_min), label='Hessian')   
 plt.title('Minimum Eigenvalue of the Hessian Matrix')
-plt.xlabel('tau')
+plt.xlabel('log(tau)')
 plt.ylabel('eigenvalue')
 plt.legend()
 plt.tight_layout()
@@ -166,7 +166,7 @@ plt.show()
 plt.figure(figsize=(5,5))
 plt.plot(np.log(np.array(std)**2), np.array(H_inv_eig_max), label='Inverse of Hessian')   
 plt.title('Maximum Eigenvalue of the Inverse Hessian Matrix')
-plt.xlabel('tau')
+plt.xlabel('log(tau)')
 plt.ylabel('eigenvalue')
 plt.legend()
 plt.tight_layout()
