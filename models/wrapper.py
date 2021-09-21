@@ -45,7 +45,9 @@ def eval(model, device, data):
 
 
 def accuracy(predictions, labels):
-    print(f"Accuracy: {100 * np.mean(np.argmax(predictions.cpu().numpy(), axis=1) == labels.numpy()):.2f}%")
+    accuracy = 100 * np.mean(np.argmax(predictions.cpu().numpy(), axis=1) == labels.numpy())
+    print(f"Accuracy: {accuracy:.2f}%")
+    return accuracy
 
 
 class BaseNet_750(nn.Module):

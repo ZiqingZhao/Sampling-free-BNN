@@ -90,9 +90,10 @@ test_set = datasets.MNIST(root=data_path,
 test_loader = DataLoader(test_set, batch_size=1)
 
 N = 200
-std = [i/30 for i in range(1,11)]
+std = [i/20 for i in range(1,11)]
 H_eig = []
 H_inv_eig = []
+acc = []
 for i in range(10):
     print(f"std: {std[i]}")
     # Train the model
@@ -103,13 +104,15 @@ for i in range(10):
     get_nb_parameters(net)
     criterion = torch.nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-    train(net, device, train_loader, criterion, optimizer, epochs=3)
+    train(net, device, train_loader, criterion, optimizer, epochs=10)
     # save(net, model_path + 'BaseNet_15k.dat')
     # load(net, model_path + 'BaseNet_750.dat')
 
     # run on the testset
     sgd_predictions, sgd_labels = eval(net, device, test_loader)
-    accuracy(sgd_predictions, sgd_labels)
+    acc.append(accuracy(sgd_predictions, sgd_labels))
+
+'''
 
     # update likelihood FIM
     H = None
@@ -151,53 +154,15 @@ H_inv_eig_max = []
 for i in range(10):
     H_eig_min.append(H_eig[i].min().item())
     H_inv_eig_max.append(H_inv_eig[i].max().item())
-
+'''
 
 # plot the results
 plt.figure(figsize=(5,5))
-plt.plot(np.array(std)**2, np.array(H_inv_eig_max), label='Inverse of Hessian')   
-plt.plot(1/np.array(std)**2, np.array(std)**2, label='1/tau')  
-plt.title('Maximum Eigenvalue of the Inverse Hessian Matrix')
-plt.xlabel('tau')
-plt.ylabel('eigenvalue')
-plt.legend()
+#plt.plot(np.array(std)**2, np.array(H_inv_eig_max), label='Inverse of Hessian')   
+plt.plot(np.array(std), np.array(acc))  
+plt.title('Accuracy-std')
+plt.xlabel('std')
+plt.ylabel('Accuracy')
 plt.tight_layout()
 plt.show()
 
-"""
-# inversion of H
-add = 1
-multiply = 200
-diag = torch.diag(H.new(H.shape[0]).fill_(add ** 0.5))
-reg = multiply ** 0.5 * H + diag
-H_inv = torch.inverse(reg).cpu()
-
-
-
-sum_diag = torch.diag(H_inv).abs().sum().item()
-sum_non_diag = torch.abs(H_inv-torch.diag(torch.diag(H_inv))).sum()
-print(f"sum of diagonal: {sum_diag:.2f}")
-print(f"sum of non-diagonal: {sum_non_diag:.2f}")
-
-min = H_inv.abs().min().item()
-max = H_inv.abs().max().item()
-H_norm = (H_inv.abs() - min) / (max-min)
-
-PIL_image = Image.fromarray(np.uint8(255*torch.sqrt(H_norm[:3000,:3000]).numpy())).convert('RGB')
-PIL_image.save(result_path+'15k/H_inv_15k_sqrt.png')
-
-
-'''
-748
-H_inv
-sum of diagonal: 605.26
-sum of non-diagonal: 1609.85
-
-15080
-H_inv 
-sum of diagonal: 14879.16
-sum of non-diagonal: 63296.37
-
-60
-'''
-"""
