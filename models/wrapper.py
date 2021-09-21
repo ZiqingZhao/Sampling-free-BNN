@@ -88,3 +88,12 @@ class BaseNet_15k(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
+
+    def weight_init(self, std):
+        for layer in self.modules():   
+            if layer.__class__.__name__ in ['Linear', 'Conv2d']:
+                init.normal_(layer.weight, 0, std)
+            # bias.data should be 0
+                layer.bias.data.fill_(0)
+            elif layer.__class__.__name__ == 'MultiheadAttention':
+                raise NotImplementedError
