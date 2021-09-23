@@ -61,7 +61,7 @@ test_set = datasets.MNIST(root=data_path,
 test_loader = DataLoader(test_set, batch_size=1)
 
 N = 200
-std = 0.2
+std = 0.1
 
 # Train the model
 net = BaseNet_15k()
@@ -113,4 +113,4 @@ max = H.abs().max().item()
 H_norm = (H.abs() - min) / (max-min)
 
 PIL_image = Image.fromarray(np.uint8(255*torch.sqrt(H_norm[:3000,:3000]).numpy())).convert('RGB')
-PIL_image.save(result_path+'15k/H_15k_sqrt.png')
+PIL_image.save(result_path+'750/H_750_dense.png')
