@@ -113,7 +113,7 @@ diag = torch.diag(std * torch.ones(H.shape[0]))
 H_inv = torch.linalg.pinv(N * H + diag)
 
 H_diag = torch.diag(H)
-H_inv_diag = torch.reciprocal(N * H_diag + diag)
+H_inv_diag = torch.diag(torch.reciprocal(N * H_diag + std * torch.ones(H.shape[0])))
 
 
 image_inv = tensor_to_image(H_inv.abs())
@@ -122,3 +122,5 @@ image_inv.save(result_path+'750/H_inv_750_dense.png')
 image_inv_diag = tensor_to_image(H_inv_diag.abs())
 image_inv_diag.save(result_path+'750/H_inv_750_diag.png')
 
+image_error = tensor_to_image(torch.abs(H_inv-H_inv_diag))
+image_error.save(result_path+'750/error_750.png')
