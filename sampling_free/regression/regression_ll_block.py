@@ -9,7 +9,6 @@ sys.path.append(parent)
 
 
 # From the repository
-from models.wrapper import BaseNet
 from models.curvatures import BlockDiagonal, Diagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
 from models import plot
@@ -18,6 +17,7 @@ from models import plot
 import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
+from torch.nn import init
 import torch.utils.data as Data
 
 import matplotlib.pyplot as plt
@@ -38,29 +38,15 @@ class Net(torch.nn.Module):
         x = F.relu(self.fc2(x)) 
         x = self.fc3(x)  # linear output
         return x
-
-# model with one specific layer
-class CurrentLayer(torch.nn.Module):
-    # Wrap any model to get the response of an intermediate layer
-    def __init__(self, model, layer=None):
-        """
-        model: PyTorch model
-        layer: int, which model response layers to output
-        """
-        super().__init__()
-        features = list(model.modules())[1:]
-        self.features = torch.nn.ModuleList(features).eval()
-
-        if layer is None:
-            layer = len(self.features)
-        self.layer = layer
-
-    def forward(self, x):
-        # Propagates input through each layer of model until self.layer, at which point it returns that layer's output
-        for ii, mdl in enumerate(self.features):
-            x = mdl(x)
-            if ii == self.layer:
-                return x
+    
+    def weight_init(self, std):
+        for layer in self.modules():   
+            if layer.__class__.__name__ in ['Linear', 'Conv2d']:
+                init.normal_(layer.weight, 0, std)
+            # bias.data should be 0
+                layer.bias.data.fill_(0)
+            elif layer.__class__.__name__ == 'MultiheadAttention':
+                raise NotImplementedError
 
 
 # backward Jacobian: derivative of outputs with respect to weights
@@ -84,20 +70,29 @@ def jacobian(y, x):
         jac[i,:] = torch.flatten(gradient(y, x, grad_outputs))
     return jac
 
+# file path
+parent = os.path.dirname(os.path.dirname(current))
+data_path = parent + "/data/"
+model_path = parent + "/theta/"
+result_path = parent + "/results/Regression/"
 
 torch.manual_seed(2)    # reproducible
 
+# initialize data
+std = 0.03
+N = 30
 sigma = 0.2
 x = torch.FloatTensor(30, 1).uniform_(-4, 4).sort(dim=0).values # random x data (tensor), shape=(20, 1)
 y = x.pow(3) + sigma * torch.rand(x.size()) # noisy y data (tensor), shape=(20, 1)
+x, y = Variable(x,requires_grad=True), Variable(y,requires_grad=True) # torch can only train on Variable
 
-# torch can only train on Variable, so convert them to Variable
-x, y = Variable(x,requires_grad=True), Variable(y,requires_grad=True)
-
-net = Net(input_dim=1, output_dim=1, n_hid=10)     # define the network
+# define the network
+net = Net(input_dim=1, output_dim=1, n_hid=10)     
+net.weight_init(std)
 optimizer = torch.optim.SGD(net.parameters(), lr=1e-3)
 loss_func = torch.nn.MSELoss()  # this is for regression mean squared loss
 
+kfac = KFAC(net)
 # train the network
 for t in range(10000):
     prediction = net.forward(x)     # input x and predict based on x
@@ -105,18 +100,10 @@ for t in range(10000):
     optimizer.zero_grad()   # clear gradients for next train
     loss.backward()         # backpropagation, compute gradients
     optimizer.step()        # apply gradients  
-    
-kfac = KFAC(net)
-prediction = net.forward(x)     # input x and predict based on x
-loss = loss_func(prediction, y)     # must be (1. nn output, 2. target)
-optimizer.zero_grad()   # clear gradients for next train
-loss.backward()         # backpropagation, compute gradients
-kfac.update(batch_size=1)
+    kfac.update(batch_size=1)
 
 estimator = kfac
-add = 2
-multiply = 100 
-estimator.invert(add, multiply)
+estimator.invert(std**2, N)
 
 
 x_ = torch.unsqueeze(torch.linspace(-6, 6), dim=1)  # x data (tensor), shape=(100, 1)
@@ -147,16 +134,22 @@ pred_std = np.array(std, dtype=float)
 
 
 # view data
-plt.figure(figsize=(10,10))
-plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - pred_std, pred_mean + pred_std, color='cornflowerblue', alpha=.4, label='+/- 1 std')
-plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 2*pred_std, pred_mean + 2*pred_std, color='cornflowerblue', alpha=.3, label='+/- 2 std')
-plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 3*pred_std, pred_mean + 3*pred_std, color='cornflowerblue', alpha=.2, label='+/- 3 std')
-plt.plot(x_.data.numpy(), y_.data.numpy(), c='grey', label='truth')
-plt.plot(x_.data.numpy(), pred_mean, c='royalblue', label='mean pred')
-plt.scatter(x.data.numpy(), y.data.numpy(), s=80, color = "black")
-plt.title('Regression Analysis')
-plt.xlabel('Independent varible')
-plt.ylabel('Dependent varible')
+plt.figure(figsize=(6,5))
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - pred_std, pred_mean + pred_std, color='burlywood', alpha=.6, label='+/- 1 std')
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 2*pred_std, pred_mean + 2*pred_std, color='burlywood', alpha=.5, label='+/- 2 std')
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 3*pred_std, pred_mean + 3*pred_std, color='burlywood', alpha=.4, label='+/- 3 std')
+plt.plot(x_.data.numpy(), y_.data.numpy(), c='black', label='ground truth', linewidth = 2)
+plt.plot(x_.data.numpy(), pred_mean, c='cornflowerblue', label='mean pred', linewidth = 2)
+plt.scatter(x.data.numpy(), y.data.numpy(), s=20, color = "black")
+plt.title('Uncertainty with block diagonal Hessian', fontsize=20)
+plt.xlabel('$x$', fontsize=15)
+plt.ylabel('$y$', fontsize=15)
 plt.legend()
-plt.tight_layout()
-plt.show()   
+plt.xlim([-6, 6])
+plt.ylim([-800, 800])
+plt.gca().yaxis.grid(alpha=0.3)
+plt.gca().xaxis.grid(alpha=0.3)
+plt.tick_params(labelsize=10)
+plt.savefig(result_path+'kfac.png', format='png', bbox_inches = 'tight')
+#plt.savefig(result_path+'diagonal.eps', format='eps', bbox_inches = 'tight')
+

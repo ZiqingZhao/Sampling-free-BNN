@@ -22,7 +22,6 @@ import torch.utils.data as Data
 
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 
 
 # define a network
@@ -80,8 +79,8 @@ result_path = parent + "/results/Regression/"
 torch.manual_seed(2)    # reproducible
 
 # initialize data
-std = 1
-N = 200
+std = 0.03
+N = 30
 sigma = 0.2
 x = torch.FloatTensor(30, 1).uniform_(-4, 4).sort(dim=0).values # random x data (tensor), shape=(20, 1)
 y = x.pow(3) + sigma * torch.rand(x.size()) # noisy y data (tensor), shape=(20, 1)
@@ -126,16 +125,6 @@ y_ = Variable(y_)
 
 std = []
 for j,x_j in enumerate(x_):
-    pred_j = net.forward(x_j)  
-    std_j = 0
-    g = [] 
-    for layer in list(net.modules())[1:]:
-        for p in layer.parameters():    
-            g.append(torch.flatten(jacobian(pred_j, p)))
-    J = torch.cat(g, dim=0).unsqueeze(0) 
-
-std = []
-for j,x_j in enumerate(x_):
     g = []
     pred_j = net.forward(x_j)  
     for p in net.parameters():    
@@ -149,17 +138,22 @@ pred_std = np.array(std, dtype=float)
 
 
 # view data
-plt.figure(figsize=(10,10))
-plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - pred_std, pred_mean + pred_std, color='cornflowerblue', alpha=.4, label='+/- 1 std')
-plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 2*pred_std, pred_mean + 2*pred_std, color='cornflowerblue', alpha=.3, label='+/- 2 std')
-plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 3*pred_std, pred_mean + 3*pred_std, color='cornflowerblue', alpha=.2, label='+/- 3 std')
-plt.plot(x_.data.numpy(), y_.data.numpy(), c='grey', label='truth')
-plt.plot(x_.data.numpy(), pred_mean, c='royalblue', label='mean pred')
-plt.scatter(x.data.numpy(), y.data.numpy(), s=80, color = "black")
-plt.title('Regression Analysis')
-plt.xlabel('Independent varible')
-plt.ylabel('Dependent varible')
+plt.figure(figsize=(6,5))
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - pred_std, pred_mean + pred_std, color='burlywood', alpha=.6, label='+/- 1 std')
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 2*pred_std, pred_mean + 2*pred_std, color='burlywood', alpha=.5, label='+/- 2 std')
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 3*pred_std, pred_mean + 3*pred_std, color='burlywood', alpha=.4, label='+/- 3 std')
+plt.plot(x_.data.numpy(), y_.data.numpy(), c='black', label='ground truth', linewidth = 2)
+plt.plot(x_.data.numpy(), pred_mean, c='cornflowerblue', label='mean pred', linewidth = 2)
+plt.scatter(x.data.numpy(), y.data.numpy(), s=20, color = "black")
+plt.title('Uncertainty with dense Hessian', fontsize=20)
+plt.xlabel('$x$', fontsize=15)
+plt.ylabel('$y$', fontsize=15)
 plt.legend()
-plt.tight_layout()
+plt.xlim([-6, 6])
+plt.gca().yaxis.grid(alpha=0.3)
+plt.gca().xaxis.grid(alpha=0.3)
+plt.tick_params(labelsize=10)
 plt.show()   
-plt.savefig(result_path+'dense.eps', format='eps')
+plt.savefig(result_path+'dense.png', format='png', bbox_inches = 'tight')
+plt.savefig(result_path+'dense.eps', format='eps', bbox_inches = 'tight')
+
