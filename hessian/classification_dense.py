@@ -124,3 +124,7 @@ image_inv_diag.save(result_path+'750/H_inv_750_diag.png')
 
 image_error = tensor_to_image(torch.abs(H_inv-H_inv_diag))
 image_error.save(result_path+'750/error_750.png')
+
+torch.save(H, result_path+'H_dense_750.pt')
+torch.save(H_inv, result_path+'H_inv_dense_750.pt')
+torch.save(H_inv_diag, result_path+'H_inv_diag_750.pt')
