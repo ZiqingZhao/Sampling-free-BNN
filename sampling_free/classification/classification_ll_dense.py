@@ -7,7 +7,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
-parent = os.path.dirname(current)
+parent = os.path.dirname(os.path.dirname(current))
 sys.path.append(parent)
 
 # Standard imports

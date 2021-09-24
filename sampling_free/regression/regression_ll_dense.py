@@ -4,12 +4,11 @@ import os
 
 from numpy.core.function_base import add_newdoc
 current = os.path.dirname(os.path.realpath(__file__))
-parent = os.path.dirname(current)
+parent = os.path.dirname(os.path.dirname(current))
 sys.path.append(parent)
 
 
 # From the repository
-from models.wrapper import BaseNet
 from models.curvatures import BlockDiagonal, Diagonal, KFAC, EFB, INF
 from models.utilities import calibration_curve
 from models import plot
@@ -18,11 +17,12 @@ from models import plot
 import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
+from torch.nn import init
 import torch.utils.data as Data
 
 import matplotlib.pyplot as plt
 import numpy as np
-import imageio
+import seaborn as sns
 
 
 # define a network
@@ -39,28 +39,15 @@ class Net(torch.nn.Module):
         x = self.fc3(x)  # linear output
         return x
 
-# model with one specific layer
-class CurrentLayer(torch.nn.Module):
-    # Wrap any model to get the response of an intermediate layer
-    def __init__(self, model, layer=None):
-        """
-        model: PyTorch model
-        layer: int, which model response layers to output
-        """
-        super().__init__()
-        features = list(model.modules())[1:]
-        self.features = torch.nn.ModuleList(features).eval()
+    def weight_init(self, std):
+        for layer in self.modules():   
+            if layer.__class__.__name__ in ['Linear', 'Conv2d']:
+                init.normal_(layer.weight, 0, std)
+            # bias.data should be 0
+                layer.bias.data.fill_(0)
+            elif layer.__class__.__name__ == 'MultiheadAttention':
+                raise NotImplementedError
 
-        if layer is None:
-            layer = len(self.features)
-        self.layer = layer
-
-    def forward(self, x):
-        # Propagates input through each layer of model until self.layer, at which point it returns that layer's output
-        for ii, mdl in enumerate(self.features):
-            x = mdl(x)
-            if ii == self.layer:
-                return x
 
 
 # backward Jacobian: derivative of outputs with respect to weights
@@ -84,53 +71,54 @@ def jacobian(y, x):
         jac[i,:] = torch.flatten(gradient(y, x, grad_outputs))
     return jac
 
-def hessian(y,x):
-    grads = torch.autograd.grad(y, x, retain_graph=True, create_graph=True)
-    print( grads[0] )
-    hess = torch.zeros_like(grads[0])
-    for i in range(grads[0].size(0)):
-        for j in range(grads[0].size(1)):
-            hess[i, j] = torch.autograd.grad(grads[0][i][j], x, retain_graph=True)[0][i, j]
-    return hess
+# file path
+parent = os.path.dirname(os.path.dirname(current))
+data_path = parent + "/data/"
+model_path = parent + "/theta/"
+result_path = parent + "/results/Regression/"
 
 torch.manual_seed(2)    # reproducible
 
+# initialize data
+std = 1
+N = 200
 sigma = 0.2
 x = torch.FloatTensor(30, 1).uniform_(-4, 4).sort(dim=0).values # random x data (tensor), shape=(20, 1)
 y = x.pow(3) + sigma * torch.rand(x.size()) # noisy y data (tensor), shape=(20, 1)
+x, y = Variable(x,requires_grad=True), Variable(y,requires_grad=True) # torch can only train on Variable
 
-# torch can only train on Variable, so convert them to Variable
-x, y = Variable(x,requires_grad=True), Variable(y,requires_grad=True)
-
-net = Net(input_dim=1, output_dim=1, n_hid=10)     # define the network
+# define the network
+net = Net(input_dim=1, output_dim=1, n_hid=10)     
+net.weight_init(std)
 optimizer = torch.optim.SGD(net.parameters(), lr=1e-3)
 loss_func = torch.nn.MSELoss()  # this is for regression mean squared loss
 
-# train the network
+
+# update likelihood FIM
+H = None
 for t in range(10000):
     prediction = net.forward(x)     # input x and predict based on x
     loss = loss_func(prediction, y)     # must be (1. nn output, 2. target)
     optimizer.zero_grad()   # clear gradients for next train
     loss.backward()         # backpropagation, compute gradients
     optimizer.step()        # apply gradients  
-    
-# get inversion of H
-add = 1
-multiply = 200
-grads = []
-for layer in list(net.model.modules())[1:]:
-    for p in layer.parameters():    
-        grads.append(torch.flatten(p.grad.view(-1)))
-J_loss = torch.cat(grads, dim=0).unsqueeze(0) 
-H = J_loss.t() @ J_loss
-diag = torch.diag(H.new(H.shape[0]).fill_(add ** 0.5))
-reg = multiply ** 0.5 * H + diag
-H_inv = torch.inverse(reg)
-sum_diag = torch.diag(H_inv).abs().sum()
-sum_non_diag = torch.abs(H_inv-torch.diag(H_inv)).sum()
-print(f"sum of diagonal: {sum_diag:.2f}")
-print(f"sum of non-diagonal: {sum_non_diag:.2f}")
+    grads = []
+    for layer in list(net.modules())[1:]:
+        for p in layer.parameters():    
+            J_p = torch.flatten(p.grad.view(-1)).unsqueeze(0)
+            grads.append(J_p)
+    J_loss = torch.cat(grads, dim=1)
+    H_loss = J_loss.t() @ J_loss
+    H_loss.requires_grad = False
+    H = H_loss if H == None else H + H_loss
+H = H/10000
 
+# get inversion of H
+diag = torch.diag(std * torch.ones(H.shape[0]))
+H_inv = torch.linalg.pinv(N * H + diag)
+
+
+# make new prediction
 x_ = torch.unsqueeze(torch.linspace(-6, 6), dim=1)  # x data (tensor), shape=(100, 1)
 y_ = x_.pow(3)      
 x_ = Variable(x_)
@@ -145,3 +133,33 @@ for j,x_j in enumerate(x_):
         for p in layer.parameters():    
             g.append(torch.flatten(jacobian(pred_j, p)))
     J = torch.cat(g, dim=0).unsqueeze(0) 
+
+std = []
+for j,x_j in enumerate(x_):
+    g = []
+    pred_j = net.forward(x_j)  
+    for p in net.parameters():    
+        g.append(torch.flatten(jacobian(pred_j, p)))
+    J = torch.cat(g, dim=0).unsqueeze(0) 
+    std.append(torch.abs(J @ H @ J.t()) ** 0.5 + sigma)
+
+
+pred_mean = net.forward(x_).data.numpy().squeeze(1)
+pred_std = np.array(std, dtype=float) 
+
+
+# view data
+plt.figure(figsize=(10,10))
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - pred_std, pred_mean + pred_std, color='cornflowerblue', alpha=.4, label='+/- 1 std')
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 2*pred_std, pred_mean + 2*pred_std, color='cornflowerblue', alpha=.3, label='+/- 2 std')
+plt.fill_between(x_.data.numpy().squeeze(1), pred_mean - 3*pred_std, pred_mean + 3*pred_std, color='cornflowerblue', alpha=.2, label='+/- 3 std')
+plt.plot(x_.data.numpy(), y_.data.numpy(), c='grey', label='truth')
+plt.plot(x_.data.numpy(), pred_mean, c='royalblue', label='mean pred')
+plt.scatter(x.data.numpy(), y.data.numpy(), s=80, color = "black")
+plt.title('Regression Analysis')
+plt.xlabel('Independent varible')
+plt.ylabel('Dependent varible')
+plt.legend()
+plt.tight_layout()
+plt.show()   
+plt.savefig(result_path+'dense.eps', format='eps')
