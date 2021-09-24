@@ -122,12 +122,3 @@ image_inv.save(result_path+'750/H_inv_750_dense.png')
 image_inv_diag = tensor_to_image(H_inv_diag.abs())
 image_inv_diag.save(result_path+'750/H_inv_750_diag.png')
 
-'''
-min = H.abs().min().item()
-max = H.abs().max().item()
-H_norm = (H.abs() - min) / (max-min)
-
-PIL_image = Image.fromarray(np.uint8(255*torch.sqrt(H_norm).numpy())).convert('RGB')
-PIL_image.save(result_path+'750/H_750_dense.png')
-
-'''
