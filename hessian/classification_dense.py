@@ -30,6 +30,13 @@ from models.utilities import *
 from models.plot import *
 from models.wrapper import *
    
+def tensor_to_image(tensor):
+    min = tensor.min().item()
+    max = tensor.max().item()
+    norm = (tensor - min) / (max-min)
+    image = Image.fromarray(np.uint8(255*torch.sqrt(norm).numpy())).convert('RGB')
+    return image
+
 # file path
 parent = os.path.dirname(current)
 data_path = parent + "/data/"
@@ -103,14 +110,17 @@ for images, labels in tqdm(train_loader):
 H = H.cpu()/len(train_loader) 
 
 diag = torch.diag(std * torch.ones(H.shape[0]))
-H_inv = torch.linalg.pinv(N * H + diag).cpu()
+H_inv = torch.linalg.pinv(N * H + diag)
 
-min = H_inv.abs().min().item()
-max = H_inv.abs().max().item()
-H_norm = (H_inv.abs() - min) / (max-min)
+H_diag = torch.diag(H)
+H_inv_diag = torch.reciprocal(N * H_diag + diag)
 
-PIL_image = Image.fromarray(np.uint8(255*torch.sqrt(H_norm).numpy())).convert('RGB')
-PIL_image.save(result_path+'750/H_inv_750_dense.png')
+
+image_inv = tensor_to_image(H_inv.abs())
+image_inv.save(result_path+'750/H_inv_750_dense.png')
+
+image_inv_diag = tensor_to_image(H_inv_diag.abs())
+image_inv_diag.save(result_path+'750/H_inv_750_diag.png')
 
 '''
 min = H.abs().min().item()
